@@ -37,8 +37,8 @@ static COLORS: [Color; 8] = [
 ];
 
 impl ProcessManager {
-  pub fn from_string(input: &str, mode: RunningMode) -> Result<Self, String> {
-    let parsed = Self::parse_lines(input)?;
+  pub fn from_string(input: &str, mode: RunningMode, exclude: Vec<String>) -> Result<Self, String> {
+    let parsed = Self::parse_lines(input, exclude)?;
     let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
 
     let processes = parsed
@@ -53,9 +53,11 @@ impl ProcessManager {
     Ok(Self { processes, name_width, mode })
   }
   
-  fn parse_lines(input: &str) -> Result<Vec<(&str, &str)>, String> {
+  fn parse_lines(input: &str, exclude: Vec<String>) -> Result<Vec<(&str, &str)>, String> {
     let mut result = Vec::new();
     let mut errors = Vec::new();
+    
+    let exclude = exclude.iter().map(String::as_str).collect::<Vec<_>>();
     
     for (n, line) in input.lines().enumerate() {
       if line.starts_with('#') || line.trim().is_empty() {
@@ -77,6 +79,10 @@ impl ProcessManager {
 
           if cmd.is_empty() {
             errors.push(format!("Line {} doesn't have a command:\n> {}", n, line));
+            continue;
+          }
+          
+          if exclude.contains(&name) {
             continue;
           }
 

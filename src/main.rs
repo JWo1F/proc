@@ -1,5 +1,6 @@
 use crate::process_manager::{ProcessManager, RunningMode};
 use std::fs;
+use std::process::exit;
 use clap::Parser;
 
 mod process;
@@ -15,7 +16,11 @@ struct Args {
 
   /// Running mode
   #[arg(value_enum, short, long, default_value_t = RunningMode::Exit)]
-  mode: RunningMode
+  mode: RunningMode,
+
+  /// Exclude processes from the Procfile
+  #[arg(short = 'x', long)]
+  exclude: Vec<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -34,7 +39,7 @@ pub async fn main() {
   };
   
   let config = String::from_utf8_lossy(&config);
-  let manager = ProcessManager::from_string(&config, args.mode);
+  let manager = ProcessManager::from_string(&config, args.mode, args.exclude);
 
   match manager {
     Err(err) => {
