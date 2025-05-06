@@ -1,15 +1,30 @@
-use crate::process_manager::ProcessManager;
+use crate::process_manager::{ProcessManager, RunningMode};
 use std::fs;
+use clap::Parser;
 
 mod process;
 mod process_manager;
 mod ansi;
 mod signal;
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+  /// Path to the Procfile
+  #[arg(short, long, default_value = "Procfile")]
+  config: String,
+
+  /// Running mode
+  #[arg(value_enum, short, long, default_value_t = RunningMode::Exit)]
+  mode: RunningMode
+}
+
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() {
+  let args = Args::parse();
+  
   let config = {
-    let conf = fs::read("./Procfile");
+    let conf = fs::read(args.config);
 
     if conf.is_err() {
       eprintln!("Error reading Procfile: {}", conf.unwrap_err());
@@ -20,7 +35,7 @@ pub async fn main() {
   };
   
   let config = String::from_utf8_lossy(&config);
-  let manager = ProcessManager::from_string(&config);
+  let manager = ProcessManager::from_string(&config, args.mode);
 
   match manager {
     Err(err) => {

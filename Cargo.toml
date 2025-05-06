@@ -7,7 +7,7 @@ edition = "2024"
 tokio = { version = "1.44.2", features = ["macros", "process", "rt", "io-util", "signal"] }
 colored = "3.0.0"
 pty-process = { version = "0.5.1", features = ["async"] }
-futures = "0.3.31"
 futures-concurrency = "7.6.3"
 terminal_size = "0.4.2"
 nix = { version = "0.30.1", features = ["signal"] }
+clap = { version = "4.5.37", features = ["derive"] }

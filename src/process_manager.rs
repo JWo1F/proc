@@ -1,3 +1,5 @@
+use std::fmt::Display;
+use clap::ValueEnum;
 use crate::process::{Process, ReadResult};
 use crate::signal::ChildSignal;
 use colored::{Color, Colorize};
@@ -5,11 +7,22 @@ use futures_concurrency::future::Race;
 use nix::sys::signal::Signal;
 use tokio::select;
 
-#[derive(PartialOrd, PartialEq)]
+#[derive(Debug, Clone, PartialOrd, PartialEq, ValueEnum)]
 pub enum RunningMode {
   Restart,
   Exit,
+  #[value(skip)]
   Relax
+}
+
+impl Display for RunningMode {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      RunningMode::Restart => write!(f, "Restart"),
+      RunningMode::Exit => write!(f, "Exit"),
+      RunningMode::Relax => write!(f, "Relax"),
+    }
+  }
 }
 
 pub struct ProcessManager {
@@ -24,10 +37,9 @@ static COLORS: [Color; 8] = [
 ];
 
 impl ProcessManager {
-  pub fn from_string(input: &str) -> Result<Self, String> {
+  pub fn from_string(input: &str, mode: RunningMode) -> Result<Self, String> {
     let parsed = Self::parse_lines(input)?;
     let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
-    let mode = RunningMode::Exit;
 
     let processes = parsed
       .iter()
@@ -141,7 +153,7 @@ impl ProcessManager {
       }
     }
   }
-  
+
   pub async fn start(&mut self) {
     loop {
       select! {
@@ -150,13 +162,13 @@ impl ProcessManager {
             Some(line) => {
               println!("{}", line);
             }
-            
+
             None => {
               break;
             }
           }
         }
-        
+
         _ = tokio::signal::ctrl_c() => {
           println!("Got Ctrl-C!");
           self.stop();
