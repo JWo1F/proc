@@ -24,19 +24,19 @@ pub async fn main() {
   
   let mut manager = {
     let manager = ProcessManager::from_string(&config);
-    
+
     match manager {
       Err(err) => {
         eprintln!("Error parsing Procfile: {}", err);
         return;
       }
-      
+
       Ok(manager) => {
         manager
       }
     }
   };
-  
+
   loop {
     select! {
       line = manager.read_line() => {
