@@ -1,6 +1,5 @@
 use colored::Color;
 use pty_process::{Command, Pty};
-use terminal_size::{terminal_size, Height, Width};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::Child;
 
@@ -27,27 +26,19 @@ impl Process {
       child: None,
       color,
     };
-    
+
     proc.start();
-    
+
     proc
   }
-  
+
   pub fn start(&mut self) {
     let (pty, pts) = pty_process::open().unwrap();
-    let (Width(w), Height(h)) = terminal_size().unwrap();
-
-    pty.resize(pty_process::Size::new(w, h)).unwrap();
-
-    let cmd = Command::new("/bin/bash")
-      .arg("-c")
-      .arg(&self.cmd)
-      .env("TERM", "xterm-256color");
-
+    let cmd = Command::new("/bin/bash").arg("-c").arg(&self.cmd);
     let child = cmd.spawn(pts).unwrap();
 
     println!("{} spawned ({:?})", self.name, child.id());
-    
+
     self.child = Some(child);
     self.reader = Some(BufReader::new(pty).lines());
   }
