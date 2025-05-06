@@ -3,7 +3,6 @@ use crate::signal::ChildSignal;
 use colored::{Color, Colorize};
 use futures_concurrency::future::Race;
 use nix::sys::signal::Signal;
-use std::process::exit;
 
 #[derive(PartialOrd, PartialEq)]
 pub enum RunningMode {
@@ -115,6 +114,7 @@ impl ProcessManager {
     match self.mode {
       RunningMode::Restart => {
         println!("{}", self.compose_line(proc, "Restarting..."));
+        self.processes[index].start();
       }
 
       RunningMode::Exit => {
@@ -134,8 +134,10 @@ impl ProcessManager {
     self.mode = RunningMode::Relax;
 
     for process in self.processes.iter() {
-      process.child.signal(Signal::SIGINT);
-      println!("{}", self.compose_line(process, "Stopping..."));
+      if let Some(child) = &process.child {
+        child.signal(Signal::SIGINT);
+        println!("{}", self.compose_line(process, "Stopping..."));
+      }
     }
   }
 

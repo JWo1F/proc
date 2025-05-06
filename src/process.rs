@@ -6,8 +6,9 @@ use tokio::process::Child;
 
 pub struct Process {
   pub name: String,
-  pub reader: Lines<BufReader<Pty>>,
-  pub child: Child,
+  pub cmd: String,
+  pub reader: Option<Lines<BufReader<Pty>>>,
+  pub child: Option<Child>,
   pub color: Color,
 }
 
@@ -19,6 +20,20 @@ pub enum ReadResult {
 
 impl Process {
   pub fn new(name: &str, cmd: &str, color: Color) -> Self {
+    let mut proc = Self {
+      name: name.to_string(),
+      cmd: cmd.to_string(),
+      reader: None,
+      child: None,
+      color,
+    };
+    
+    proc.start();
+    
+    proc
+  }
+  
+  pub fn start(&mut self) {
     let (pty, pts) = pty_process::open().unwrap();
     let (Width(w), Height(h)) = terminal_size().unwrap();
 
@@ -26,28 +41,28 @@ impl Process {
 
     let cmd = Command::new("/bin/bash")
       .arg("-c")
-      .arg(cmd)
+      .arg(&self.cmd)
       .env("TERM", "xterm-256color");
 
     let child = cmd.spawn(pts).unwrap();
+
+    println!("{} spawned ({:?})", self.name, child.id());
     
-    println!("{} spawned ({:?})", name, child.id());
-    
-    Self {
-      name: name.to_string(),
-      reader: BufReader::new(pty).lines(),
-      child,
-      color,
-    }
+    self.child = Some(child);
+    self.reader = Some(BufReader::new(pty).lines());
   }
 
   pub async fn read_line(&mut self) -> ReadResult {
-    let res = self.reader.next_line().await;
+    if let Some(ref mut reader) = self.reader {
+      let res = reader.next_line().await;
 
-    match res {
-      Ok(None) => ReadResult::EOF,
-      Ok(Some(buf)) => ReadResult::Some(buf),
-      Err(err) => ReadResult::Err(format!("{}", err)),
+      match res {
+        Ok(None) => ReadResult::EOF,
+        Ok(Some(buf)) => ReadResult::Some(buf),
+        Err(err) => ReadResult::Err(format!("{}", err)),
+      }
+    } else {
+      ReadResult::Err("No reader available".to_string())
     }
   }
 }
