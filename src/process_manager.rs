@@ -50,8 +50,14 @@ impl ProcessManager {
         Process::new(name, cmd, color)
       })
       .collect::<Vec<_>>();
+    
+    let manager = Self { processes, name_width, mode, timestamps };
+    
+    for proc in &manager.processes {
+      proc.msg_spawn(&manager);
+    }
 
-    Ok(Self { processes, name_width, mode, timestamps })
+    Ok(manager)
   }
   
   fn parse_lines(input: &str, exclude: Vec<String>) -> Result<Vec<(&str, &str)>, String> {
@@ -141,6 +147,7 @@ impl ProcessManager {
       RunningMode::Restart => {
         println!("{}", self.compose_line(proc, "Restarting..."));
         self.processes[index].start();
+        self.processes[index].msg_spawn(self);
       }
 
       RunningMode::Exit => {
@@ -190,7 +197,7 @@ impl ProcessManager {
     }
   }
 
-  fn compose_line(&self, proc: &Process, line: &str) -> String {
+  pub(crate) fn compose_line(&self, proc: &Process, line: &str) -> String {
     let name = proc.name.color(proc.color);
     let width = self.name_width;
 

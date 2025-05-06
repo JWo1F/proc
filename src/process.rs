@@ -2,6 +2,7 @@ use colored::Color;
 use pty_process::{Command, Pty};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::Child;
+use crate::process_manager::ProcessManager;
 
 pub struct Process {
   pub name: String,
@@ -36,9 +37,7 @@ impl Process {
     let (pty, pts) = pty_process::open().unwrap();
     let cmd = Command::new("/bin/bash").arg("-c").arg(&self.cmd);
     let child = cmd.spawn(pts).unwrap();
-
-    println!("{} spawned ({:?})", self.name, child.id());
-
+    
     self.child = Some(child);
     self.reader = Some(BufReader::new(pty).lines());
   }
@@ -55,5 +54,11 @@ impl Process {
     } else {
       ReadResult::Err("No reader available".to_string())
     }
+  }
+  
+  pub fn msg_spawn(&self, manager: &ProcessManager) {
+    let pid =  self.child.as_ref().unwrap().id().unwrap();
+    let msg = format!("Spawned, pid: {}", pid);
+    println!("{}", manager.compose_line(self, &msg));
   }
 }
