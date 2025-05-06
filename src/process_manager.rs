@@ -176,7 +176,7 @@ impl ProcessManager {
         }
 
         _ = tokio::signal::ctrl_c() => {
-          println!("Got Ctrl-C!");
+          println!("Ctrl+C received, stopping processes...");
           self.stop();
         }
       }
