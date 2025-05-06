@@ -1,7 +1,6 @@
 use crate::process_manager::{ProcessManager, RunningMode};
-use std::fs;
-use std::process::exit;
 use clap::Parser;
+use std::fs;
 
 mod process;
 mod process_manager;
@@ -21,7 +20,7 @@ struct Args {
   /// Exclude processes from the Procfile
   #[arg(short = 'x', long)]
   exclude: Vec<String>,
-  
+
   /// Show timestamps
   #[arg(short = 'T', long)]
   timestamps: bool,
