@@ -57,20 +57,26 @@ impl ProcessManager {
     let mut result = Vec::new();
     let mut errors = Vec::new();
     
-    for line in input.lines() {
-      if line.starts_with('#') {
+    for (n, line) in input.lines().enumerate() {
+      if line.starts_with('#') || line.trim().is_empty() {
         continue;
       }
 
-      let parsed = line.split_once(": ");
+      let n = n + 1;
+      let parsed = line.split_once(":");
 
       match parsed {
         Some((name, cmd)) => {
           let name = name.trim();
           let cmd = cmd.trim();
 
-          if name.is_empty() || cmd.is_empty() {
-            errors.push(format!("Invalid line: {}", line));
+          if name.is_empty() {
+            errors.push(format!("Line {} doesn't have a name:\n> {}", n, line));
+            continue;
+          }
+
+          if cmd.is_empty() {
+            errors.push(format!("Line {} doesn't have a command:\n> {}", n, line));
             continue;
           }
 
@@ -78,7 +84,7 @@ impl ProcessManager {
         }
 
         None => {
-          errors.push(format!("Invalid line: {}", line));
+          errors.push(format!("Line {} should contain name and command:\n> {}", n, line));
         }
       }
     }

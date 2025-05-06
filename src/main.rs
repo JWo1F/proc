@@ -38,7 +38,7 @@ pub async fn main() {
 
   match manager {
     Err(err) => {
-      eprintln!("Error parsing Procfile: {}", err);
+      eprintln!("Error parsing Procfile\n{}", err);
       return;
     }
 
