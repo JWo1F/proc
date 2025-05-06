@@ -53,7 +53,7 @@ pub async fn main() {
       
       _ = tokio::signal::ctrl_c() => {
         println!("Got Ctrl-C!");
-        manager.stop().await;
+        manager.stop();
       }
     }
   }

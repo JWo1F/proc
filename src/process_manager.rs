@@ -119,7 +119,8 @@ impl ProcessManager {
 
       RunningMode::Exit => {
         println!("{}", self.compose_line(proc, "Got Exit"));
-        exit(0);
+        self.processes.remove(index);
+        self.stop();
       }
 
       RunningMode::Relax => {
@@ -129,7 +130,7 @@ impl ProcessManager {
     }
   }
 
-  pub async fn stop(&mut self) {
+  pub fn stop(&mut self) {
     self.mode = RunningMode::Relax;
 
     for process in self.processes.iter() {
