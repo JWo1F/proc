@@ -131,13 +131,13 @@ impl ProcessManager {
       }
 
       RunningMode::Exit => {
-        println!("{}", self.compose_line(proc, "Got Exit"));
+        println!("{}", self.compose_line(proc, "Exited"));
         self.processes.remove(index);
         self.stop();
       }
 
       RunningMode::Relax => {
-        println!("{}", self.compose_line(proc, "Got Relax"));
+        println!("{}", self.compose_line(proc, "Stopped"));
         self.processes.remove(index);
       }
     }
