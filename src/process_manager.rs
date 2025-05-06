@@ -3,6 +3,7 @@ use crate::signal::ChildSignal;
 use colored::{Color, Colorize};
 use futures_concurrency::future::Race;
 use nix::sys::signal::Signal;
+use tokio::select;
 
 #[derive(PartialOrd, PartialEq)]
 pub enum RunningMode {
@@ -137,6 +138,29 @@ impl ProcessManager {
       if let Some(child) = &process.child {
         child.signal(Signal::SIGINT);
         println!("{}", self.compose_line(process, "Stopping..."));
+      }
+    }
+  }
+  
+  pub async fn start(&mut self) {
+    loop {
+      select! {
+        line = self.read_line() => {
+          match line {
+            Some(line) => {
+              println!("{}", line);
+            }
+            
+            None => {
+              break;
+            }
+          }
+        }
+        
+        _ = tokio::signal::ctrl_c() => {
+          println!("Got Ctrl-C!");
+          self.stop();
+        }
       }
     }
   }
