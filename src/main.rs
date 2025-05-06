@@ -21,6 +21,10 @@ struct Args {
   /// Exclude processes from the Procfile
   #[arg(short = 'x', long)]
   exclude: Vec<String>,
+  
+  /// Show timestamps
+  #[arg(short = 'T', long)]
+  timestamps: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -39,7 +43,7 @@ pub async fn main() {
   };
   
   let config = String::from_utf8_lossy(&config);
-  let manager = ProcessManager::from_string(&config, args.mode, args.exclude);
+  let manager = ProcessManager::from_string(&config, args.mode, args.exclude, args.timestamps);
 
   match manager {
     Err(err) => {

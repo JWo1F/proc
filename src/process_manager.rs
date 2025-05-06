@@ -29,6 +29,7 @@ pub struct ProcessManager {
   mode: RunningMode,
   name_width: usize,
   processes: Vec<Process>,
+  timestamps: bool,
 }
 
 static COLORS: [Color; 8] = [
@@ -37,7 +38,7 @@ static COLORS: [Color; 8] = [
 ];
 
 impl ProcessManager {
-  pub fn from_string(input: &str, mode: RunningMode, exclude: Vec<String>) -> Result<Self, String> {
+  pub fn from_string(input: &str, mode: RunningMode, exclude: Vec<String>, timestamps: bool) -> Result<Self, String> {
     let parsed = Self::parse_lines(input, exclude)?;
     let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
 
@@ -50,13 +51,13 @@ impl ProcessManager {
       })
       .collect::<Vec<_>>();
 
-    Ok(Self { processes, name_width, mode })
+    Ok(Self { processes, name_width, mode, timestamps })
   }
   
   fn parse_lines(input: &str, exclude: Vec<String>) -> Result<Vec<(&str, &str)>, String> {
     let mut result = Vec::new();
     let mut errors = Vec::new();
-    
+
     let exclude = exclude.iter().map(String::as_str).collect::<Vec<_>>();
     
     for (n, line) in input.lines().enumerate() {
@@ -81,7 +82,7 @@ impl ProcessManager {
             errors.push(format!("Line {} doesn't have a command:\n> {}", n, line));
             continue;
           }
-          
+
           if exclude.contains(&name) {
             continue;
           }
@@ -190,11 +191,15 @@ impl ProcessManager {
   }
 
   fn compose_line(&self, proc: &Process, line: &str) -> String {
-    format!(
-      "{:width$} | {}",
-      proc.name.color(proc.color),
-      line,
-      width = self.name_width
-    )
+    let name = proc.name.color(proc.color);
+    let width = self.name_width;
+
+    if self.timestamps {
+      let now = chrono::Local::now();
+      let timestamp = now.format("%H:%M:%S").to_string().color(proc.color);
+      format!("{} | {:width$} | {}", timestamp, name, line)
+    } else {
+      format!("{:width$} | {}", name, line)
+    }
   }
 }
