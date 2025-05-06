@@ -115,7 +115,7 @@ impl ProcessManager {
         Box::pin(self.read_line()).await
       }
 
-      ReadResult::Err(error) => {
+      ReadResult::Err(_error) => {
         unimplemented!()
       }
     }

@@ -4,7 +4,6 @@ use clap::Parser;
 
 mod process;
 mod process_manager;
-mod ansi;
 mod signal;
 
 #[derive(Parser, Debug)]
