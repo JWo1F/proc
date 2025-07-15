@@ -120,9 +120,7 @@ impl ProcessManager {
       return None;
     }
 
-    let (res, index) = pipelines
-      .race()
-      .await;
+    let (res, index) = pipelines.race().await;
 
     match res {
       ReadResult::Some(line) => {
@@ -134,8 +132,8 @@ impl ProcessManager {
         Box::pin(self.read_line()).await
       }
 
-      ReadResult::Err(_error) => {
-        unimplemented!()
+      ReadResult::Err(error) => {
+        Err(error).unwrap()
       }
     }
   }
