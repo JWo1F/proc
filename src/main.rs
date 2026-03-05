@@ -11,7 +11,7 @@ mod signal;
 #[command(version, about, long_about = None)]
 struct Args {
   /// Path to the Procfile
-  #[arg(short, long, default_value = "Procfile")]
+  #[arg(short, long, alias = "file", short_alias = 'f', default_value = "Procfile")]
   config: String,
 
   /// Running mode
