@@ -51,7 +51,11 @@ pub async fn main() {
   let config = match fs::read_to_string(&args.config) {
     Ok(config) => config,
     Err(err) => {
-      eprintln!("Error reading Procfile: {}", err);
+      match err.kind() {
+        std::io::ErrorKind::NotFound => eprintln!("{}: file not found", args.config),
+        std::io::ErrorKind::InvalidData => eprintln!("{}: not a valid text file", args.config),
+        _ => eprintln!("Error reading {}: {}", args.config, err),
+      }
       return;
     }
   };
