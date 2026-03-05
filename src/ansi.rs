@@ -1,28 +1,33 @@
+const ESC: u8 = b'\x1B';
+
 pub fn strip_ansi_except_colors(input: &[u8]) -> Vec<u8> {
   let mut result = Vec::with_capacity(input.len());
-  let mut i = 0;
+  let mut chars = input.iter().copied().enumerate();
 
-  while i < input.len() {
-    if i + 1 < input.len() && input[i] == b'\x1B' && input[i + 1] == b'[' {
-      // Found an ANSI escape sequence
-      let mut end = i + 2;
-      while end < input.len() && (input[end].is_ascii_digit() || input[end] == b';') {
-        end += 1;
+  while let Some((i, byte)) = chars.next() {
+    if byte != ESC || input.get(i + 1) != Some(&b'[') {
+      result.push(byte);
+      continue;
+    }
+
+    // Skip '[' after ESC
+    chars.next();
+
+    // Collect the sequence: digits and ';' until a final letter
+    let seq_start = i;
+    let final_byte = loop {
+      match chars.next() {
+        Some((_, b)) if b.is_ascii_digit() || b == b';' => continue,
+        Some((end, b)) => break Some((end, b)),
+        None => break None,
       }
-      if end < input.len() && input[end] == b'm' {
-        // Color sequence (ends with 'm') — keep it
-        result.extend_from_slice(&input[i..=end]);
-        i = end + 1;
-      } else {
-        // Non-color ANSI sequence — skip it
-        i = end + 1;
-      }
-    } else {
-      result.push(input[i]);
-      i += 1;
+    };
+
+    // Keep color sequences (ending with 'm'), drop everything else
+    if let Some((end, b'm')) = final_byte {
+      result.extend_from_slice(&input[seq_start..=end]);
     }
   }
 
-  result.shrink_to_fit();
   result
 }
