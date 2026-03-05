@@ -40,8 +40,8 @@ static COLORS: [Color; 8] = [
 ];
 
 impl ProcessManager {
-  pub fn from_string(input: &str, mode: RunningMode, exclude: &[String], timestamps: bool) -> Result<Self, String> {
-    let parsed = Self::parse_lines(input, exclude)?;
+  pub fn from_string(input: &str, mode: RunningMode, exclude: &[String], include: &[String], timestamps: bool) -> Result<Self, String> {
+    let parsed = Self::parse_lines(input, exclude, include)?;
     let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
 
     let processes = parsed
@@ -62,7 +62,7 @@ impl ProcessManager {
     Ok(manager)
   }
 
-  fn parse_lines<'a>(input: &'a str, exclude: &[String]) -> Result<Vec<(&'a str, &'a str)>, String> {
+  fn parse_lines<'a>(input: &'a str, exclude: &[String], include: &[String]) -> Result<Vec<(&'a str, &'a str)>, String> {
     let mut result = Vec::new();
     let mut errors = Vec::new();
 
@@ -85,6 +85,15 @@ impl ProcessManager {
 
           if cmd.is_empty() {
             errors.push(format!("Line {} doesn't have a command:\n> {}", n, line));
+            continue;
+          }
+
+          let (name, disabled) = match name.strip_prefix('$') {
+            Some(stripped) => (stripped, true),
+            None => (name, false),
+          };
+
+          if disabled && !include.iter().any(|i| i == name) {
             continue;
           }
 

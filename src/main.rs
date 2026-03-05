@@ -14,6 +14,8 @@ Procfile format:
   <name>: <command>
 
   Lines starting with '#' are comments.
+  Names starting with '$' are disabled by default.
+  Use --include to enable them.
 
 Examples:
   procfile
@@ -33,6 +35,10 @@ struct Args {
   #[arg(short = 'x', long)]
   exclude: Vec<String>,
 
+  /// Include a $-prefixed (disabled) process by name (can be repeated)
+  #[arg(short, long, alias = "enable")]
+  include: Vec<String>,
+
   /// Prefix each line with a timestamp
   #[arg(short = 'T', long)]
   timestamps: bool,
@@ -50,7 +56,7 @@ pub async fn main() {
     }
   };
 
-  let mut manager = match ProcessManager::from_string(&config, args.mode, &args.exclude, args.timestamps) {
+  let mut manager = match ProcessManager::from_string(&config, args.mode, &args.exclude, &args.include, args.timestamps) {
     Ok(manager) => manager,
     Err(err) => {
       eprintln!("Error parsing Procfile\n{}", err);
