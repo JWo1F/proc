@@ -14,7 +14,7 @@ Procfile format:
   <name>: <command>
 
   Lines starting with '#' are comments.
-  Names starting with '$' are disabled by default.
+  Names starting with '_' are disabled by default.
   Use --include to enable them.
 
 Examples:
@@ -35,7 +35,7 @@ struct Args {
   #[arg(short = 'x', long)]
   exclude: Vec<String>,
 
-  /// Include a $-prefixed (disabled) process by name (can be repeated)
+  /// Include a _-prefixed (disabled) process by name (can be repeated)
   #[arg(short, long, alias = "enable")]
   include: Vec<String>,
 

@@ -88,7 +88,7 @@ impl ProcessManager {
             continue;
           }
 
-          let (name, disabled) = match name.strip_prefix('$') {
+          let (name, disabled) = match name.strip_prefix('_') {
             Some(stripped) => (stripped, true),
             None => (name, false),
           };
