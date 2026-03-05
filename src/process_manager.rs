@@ -9,9 +9,11 @@ use tokio::select;
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, ValueEnum)]
 pub enum RunningMode {
+  /// Restart a process when it exits
   Restart,
+  /// Stop all processes when any one exits
   Exit,
-  #[value(skip)]
+  /// Ignore process exits, quit when all are done
   Relax,
 }
 

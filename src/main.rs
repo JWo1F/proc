@@ -9,6 +9,17 @@ mod signal;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
+#[command(after_help = "\
+Procfile format:
+  <name>: <command>
+
+  Lines starting with '#' are comments.
+
+Examples:
+  procfile
+  procfile -c Procfile.dev -m restart
+  procfile -x web -x worker
+  procfile -f Procfile.dev -T")]
 struct Args {
   /// Path to the Procfile
   #[arg(short, long, alias = "file", short_alias = 'f', default_value = "Procfile")]
@@ -18,11 +29,11 @@ struct Args {
   #[arg(value_enum, short, long, default_value_t = RunningMode::Exit)]
   mode: RunningMode,
 
-  /// Exclude processes from the Procfile
+  /// Exclude processes by name (can be repeated)
   #[arg(short = 'x', long)]
   exclude: Vec<String>,
 
-  /// Show timestamps
+  /// Prefix each line with a timestamp
   #[arg(short = 'T', long)]
   timestamps: bool,
 }
