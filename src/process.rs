@@ -2,14 +2,13 @@ use colored::Color;
 use pty_process::{Command, Pty};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::Child;
-use crate::process_manager::ProcessManager;
 
 pub struct Process {
-  pub name: String,
-  pub cmd: String,
-  pub reader: Option<Lines<BufReader<Pty>>>,
-  pub child: Option<Child>,
-  pub color: Color,
+  pub(crate) name: String,
+  cmd: String,
+  reader: Option<Lines<BufReader<Pty>>>,
+  pub(crate) child: Option<Child>,
+  pub(crate) color: Color,
 }
 
 pub enum ReadResult {
@@ -37,7 +36,7 @@ impl Process {
     let (pty, pts) = pty_process::open().unwrap();
     let cmd = Command::new("/bin/bash").arg("-c").arg(&self.cmd);
     let child = cmd.spawn(pts).unwrap();
-    
+
     self.child = Some(child);
     self.reader = Some(BufReader::new(pty).lines());
   }
@@ -48,17 +47,18 @@ impl Process {
 
       match res {
         Ok(None) => ReadResult::EOF,
-        Ok(Some(buf)) => ReadResult::Some(buf),
+        Ok(Some(buf)) => {
+          let stripped = crate::ansi::strip_ansi_except_colors(buf.as_bytes());
+          ReadResult::Some(String::from_utf8_lossy(&stripped).into_owned())
+        }
         Err(err) => ReadResult::Err(format!("{}", err)),
       }
     } else {
       ReadResult::Err("No reader available".to_string())
     }
   }
-  
-  pub fn msg_spawn(&self, manager: &ProcessManager) {
-    let pid =  self.child.as_ref().unwrap().id().unwrap();
-    let msg = format!("Spawned, pid: {}", pid);
-    println!("{}", manager.compose_line(self, &msg));
+
+  pub fn pid(&self) -> Option<u32> {
+    self.child.as_ref().and_then(|c| c.id())
   }
 }

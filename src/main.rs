@@ -2,6 +2,7 @@ use crate::process_manager::{ProcessManager, RunningMode};
 use clap::Parser;
 use std::fs;
 
+mod ansi;
 mod process;
 mod process_manager;
 mod signal;
@@ -29,29 +30,22 @@ struct Args {
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() {
   let args = Args::parse();
-  
-  let config = {
-    let conf = fs::read(args.config);
 
-    if conf.is_err() {
-      eprintln!("Error reading Procfile: {}", conf.unwrap_err());
+  let config = match fs::read_to_string(&args.config) {
+    Ok(config) => config,
+    Err(err) => {
+      eprintln!("Error reading Procfile: {}", err);
       return;
     }
-    
-    conf.unwrap()
   };
-  
-  let config = String::from_utf8_lossy(&config);
-  let manager = ProcessManager::from_string(&config, args.mode, args.exclude, args.timestamps);
 
-  match manager {
+  let mut manager = match ProcessManager::from_string(&config, args.mode, &args.exclude, args.timestamps) {
+    Ok(manager) => manager,
     Err(err) => {
       eprintln!("Error parsing Procfile\n{}", err);
       return;
     }
+  };
 
-    Ok(mut manager) => {
-      manager.start().await;
-    }
-  }
+  manager.start().await;
 }

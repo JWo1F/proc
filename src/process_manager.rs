@@ -12,7 +12,7 @@ pub enum RunningMode {
   Restart,
   Exit,
   #[value(skip)]
-  Relax
+  Relax,
 }
 
 impl Display for RunningMode {
@@ -38,7 +38,7 @@ static COLORS: [Color; 8] = [
 ];
 
 impl ProcessManager {
-  pub fn from_string(input: &str, mode: RunningMode, exclude: Vec<String>, timestamps: bool) -> Result<Self, String> {
+  pub fn from_string(input: &str, mode: RunningMode, exclude: &[String], timestamps: bool) -> Result<Self, String> {
     let parsed = Self::parse_lines(input, exclude)?;
     let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
 
@@ -50,31 +50,28 @@ impl ProcessManager {
         Process::new(name, cmd, color)
       })
       .collect::<Vec<_>>();
-    
+
     let manager = Self { processes, name_width, mode, timestamps };
-    
+
     for proc in &manager.processes {
-      proc.msg_spawn(&manager);
+      manager.log_spawn(proc);
     }
 
     Ok(manager)
   }
-  
-  fn parse_lines(input: &str, exclude: Vec<String>) -> Result<Vec<(&str, &str)>, String> {
+
+  fn parse_lines<'a>(input: &'a str, exclude: &[String]) -> Result<Vec<(&'a str, &'a str)>, String> {
     let mut result = Vec::new();
     let mut errors = Vec::new();
 
-    let exclude = exclude.iter().map(String::as_str).collect::<Vec<_>>();
-    
     for (n, line) in input.lines().enumerate() {
       if line.starts_with('#') || line.trim().is_empty() {
         continue;
       }
 
       let n = n + 1;
-      let parsed = line.split_once(":");
 
-      match parsed {
+      match line.split_once(":") {
         Some((name, cmd)) => {
           let name = name.trim();
           let cmd = cmd.trim();
@@ -89,7 +86,7 @@ impl ProcessManager {
             continue;
           }
 
-          if exclude.contains(&name) {
+          if exclude.iter().any(|e| e == name) {
             continue;
           }
 
@@ -128,24 +125,25 @@ impl ProcessManager {
       }
 
       ReadResult::EOF => {
-        self.restart(index);
+        self.handle_exit(index);
         Box::pin(self.read_line()).await
       }
 
       ReadResult::Err(error) => {
-        Err(error).unwrap()
+        eprintln!("Error reading process output: {}", error);
+        None
       }
     }
   }
 
-  fn restart(&mut self, index: usize) {
+  fn handle_exit(&mut self, index: usize) {
     let proc = &self.processes[index];
 
     match self.mode {
       RunningMode::Restart => {
         println!("{}", self.compose_line(proc, "Restarting..."));
         self.processes[index].start();
-        self.processes[index].msg_spawn(self);
+        self.log_spawn(&self.processes[index]);
       }
 
       RunningMode::Exit => {
@@ -177,13 +175,8 @@ impl ProcessManager {
       select! {
         line = self.read_line() => {
           match line {
-            Some(line) => {
-              println!("{}", line);
-            }
-
-            None => {
-              break;
-            }
+            Some(line) => println!("{}", line),
+            None => break,
           }
         }
 
@@ -195,7 +188,13 @@ impl ProcessManager {
     }
   }
 
-  pub(crate) fn compose_line(&self, proc: &Process, line: &str) -> String {
+  fn log_spawn(&self, proc: &Process) {
+    if let Some(pid) = proc.pid() {
+      println!("{}", self.compose_line(proc, &format!("Spawned, pid: {}", pid)));
+    }
+  }
+
+  fn compose_line(&self, proc: &Process, line: &str) -> String {
     let name = proc.name.color(proc.color);
     let width = self.name_width;
 
