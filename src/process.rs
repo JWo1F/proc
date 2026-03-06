@@ -1,5 +1,7 @@
 use colored::Color;
+use nix::sys::signal::Signal;
 use pty_process::{Command, Pty};
+use std::process::ExitStatus;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::Child;
@@ -16,7 +18,7 @@ pub struct Process {
   /// Shell command to execute.
   cmd: String,
   /// Handle to the running child, `None` before start or between restarts.
-  pub(crate) child: Option<Child>,
+  child: Option<Child>,
   /// Color assigned for this process's log output.
   pub(crate) color: Color,
   /// Number of consecutive restarts (used for linear backoff).
@@ -64,6 +66,45 @@ impl Process {
     self.restart_attempts = self.restart_attempts.saturating_add(1);
 
     Duration::from_millis(delay_ms)
+  }
+
+  /// Whether a child process is currently running.
+  pub fn is_running(&self) -> bool {
+    self.child.is_some()
+  }
+
+  /// Send a Unix signal to the process group (negative PID) so that the child
+  /// and all its descendants receive it. No-op if the process is not running.
+  pub fn signal(&self, signal: Signal) {
+    if let Some(child) = &self.child {
+      if let Some(pid) = child.id() {
+        let gid = -(pid as i32);
+
+        if let Err(err) = nix::sys::signal::kill(nix::unistd::Pid::from_raw(gid), signal) {
+          eprintln!("Error sending signal to process {}: {}", pid, err);
+        }
+      }
+    }
+  }
+
+  /// Take the child handle and collect its exit status.
+  pub async fn take_exit_status(&mut self) -> Option<ExitStatus> {
+    let mut child = self.child.take()?;
+
+    match child.try_wait() {
+      Ok(Some(status)) => Some(status),
+      Ok(None) => match child.wait().await {
+        Ok(status) => Some(status),
+        Err(err) => {
+          eprintln!("Error waiting process [{}]: {}", self.name, err);
+          None
+        }
+      },
+      Err(err) => {
+        eprintln!("Error checking process [{}] status: {}", self.name, err);
+        None
+      }
+    }
   }
 }
 

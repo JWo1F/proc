@@ -9,9 +9,10 @@ use std::fs;
 use std::process::ExitCode;
 
 mod ansi;
+mod color;
 mod process;
 mod process_manager;
-mod signal;
+mod procfile;
 
 const DEFAULT_CONFIG: &str = "Procfile";
 

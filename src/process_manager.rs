@@ -1,8 +1,9 @@
 use crate::ansi;
+use crate::color::color_for_index;
 use crate::process::Process;
-use crate::signal::ChildSignal;
+use crate::procfile;
 use clap::ValueEnum;
-use colored::{Color, Colorize};
+use colored::Colorize;
 use nix::sys::signal::Signal;
 use pty_process::Pty;
 use std::collections::HashMap;
@@ -14,9 +15,6 @@ use tokio::io::{BufReader, Lines};
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
-const COMMENT_PREFIX: char = '#';
-const DISABLED_PREFIX: char = '_';
-const NAME_CMD_SEPARATOR: &str = ":";
 const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
 const COMPACT_INDICATOR: &str = "▌";
 /// How long to wait after SIGINT before sending SIGKILL.
@@ -81,40 +79,6 @@ pub struct ProcessManager {
   shutting_down: bool,
 }
 
-/// Golden angle in degrees — maximizes hue separation between consecutive indices.
-const GOLDEN_ANGLE: f64 = 137.508;
-const COLOR_SATURATION: f64 = 0.7;
-const COLOR_LIGHTNESS: f64 = 0.6;
-
-/// Convert HSL values (h: 0..360, s: 0..1, l: 0..1) to RGB bytes.
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
-  let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-  let h2 = h / 60.0;
-  let x = c * (1.0 - (h2 % 2.0 - 1.0).abs());
-  let (r1, g1, b1) = match h2 as u32 {
-    0 => (c, x, 0.0),
-    1 => (x, c, 0.0),
-    2 => (0.0, c, x),
-    3 => (0.0, x, c),
-    4 => (x, 0.0, c),
-    _ => (c, 0.0, x),
-  };
-  let m = l - c / 2.0;
-  (
-    ((r1 + m) * 255.0) as u8,
-    ((g1 + m) * 255.0) as u8,
-    ((b1 + m) * 255.0) as u8,
-  )
-}
-
-/// Generate a distinct color for a process by its index using the golden angle
-/// to spread hues evenly around the color wheel.
-fn color_for_index(index: usize) -> Color {
-  let hue = (index as f64 * GOLDEN_ANGLE) % 360.0;
-  let (r, g, b) = hsl_to_rgb(hue, COLOR_SATURATION, COLOR_LIGHTNESS);
-  Color::TrueColor { r, g, b }
-}
-
 impl ProcessManager {
   /// Parse a Procfile string and build a manager. Does not start processes yet.
   pub fn from_string(
@@ -125,7 +89,7 @@ impl ProcessManager {
     timestamps: bool,
     compact: bool,
   ) -> Result<Self, String> {
-    let parsed = Self::parse_lines(input, exclude, include)?;
+    let parsed = procfile::parse(input, exclude, include)?;
 
     if parsed.is_empty() {
       return Err("No processes selected after applying include/exclude filters".to_string());
@@ -210,71 +174,6 @@ impl ProcessManager {
     });
   }
 
-  /// Parse Procfile lines into (name, cmd) pairs, applying exclude/include filters.
-  /// Lines starting with `#` are comments; names starting with `_` are disabled by default.
-  fn parse_lines<'a>(
-    input: &'a str,
-    exclude: &[String],
-    include: &[String],
-  ) -> Result<Vec<(&'a str, &'a str)>, String> {
-    let mut result = Vec::new();
-    let mut errors = Vec::new();
-
-    for (n, line) in input.lines().enumerate() {
-      let trimmed = line.trim();
-
-      if trimmed.is_empty() || trimmed.starts_with(COMMENT_PREFIX) {
-        continue;
-      }
-
-      let n = n + 1;
-
-      match line.split_once(NAME_CMD_SEPARATOR) {
-        Some((name, cmd)) => {
-          let name = name.trim();
-          let cmd = cmd.trim();
-
-          if name.is_empty() {
-            errors.push(format!("Line {} doesn't have a name:\n> {}", n, line));
-            continue;
-          }
-
-          if cmd.is_empty() {
-            errors.push(format!("Line {} doesn't have a command:\n> {}", n, line));
-            continue;
-          }
-
-          let (name, disabled) = match name.strip_prefix(DISABLED_PREFIX) {
-            Some(stripped) => (stripped, true),
-            None => (name, false),
-          };
-
-          if disabled && !include.iter().any(|i| i == name) {
-            continue;
-          }
-
-          if exclude.iter().any(|e| e == name) {
-            continue;
-          }
-
-          result.push((name, cmd));
-        }
-        None => {
-          errors.push(format!(
-            "Line {} should contain name and command:\n> {}",
-            n, line
-          ));
-        }
-      }
-    }
-
-    if errors.is_empty() {
-      Ok(result)
-    } else {
-      Err(errors.join("\n"))
-    }
-  }
-
   /// Process IDs in deterministic order (for consistent log output).
   fn sorted_ids(&self) -> Vec<usize> {
     let mut ids: Vec<_> = self.processes.keys().copied().collect();
@@ -314,32 +213,12 @@ impl ProcessManager {
         }
 
         self.processes.remove(&id);
-        self.processes.retain(|_, process| process.child.is_some());
+        self.processes.retain(|_, process| process.is_running());
 
         if !self.processes.is_empty() {
           self.stop();
         }
         break;
-      }
-    }
-  }
-
-  /// Take the child handle and collect its exit status.
-  async fn take_child_status(proc: &mut Process) -> Option<ExitStatus> {
-    let mut child = proc.child.take()?;
-
-    match child.try_wait() {
-      Ok(Some(status)) => Some(status),
-      Ok(None) => match child.wait().await {
-        Ok(status) => Some(status),
-        Err(err) => {
-          eprintln!("Error waiting process [{}]: {}", proc.name, err);
-          None
-        }
-      },
-      Err(err) => {
-        eprintln!("Error checking process [{}] status: {}", proc.name, err);
-        None
       }
     }
   }
@@ -372,7 +251,7 @@ impl ProcessManager {
         return;
       };
 
-      let status = Self::take_child_status(proc).await;
+      let status = proc.take_exit_status().await;
       let exit_success = status.as_ref().is_some_and(ExitStatus::success);
       let exit_message = Self::format_exit_status(status.as_ref());
 
@@ -463,8 +342,8 @@ impl ProcessManager {
         continue;
       };
 
-      if let Some(child) = &process.child {
-        child.signal(signal);
+      if process.is_running() {
+        process.signal(signal);
         println!("{}", self.compose_system_line(process, message));
       }
     }
@@ -479,7 +358,7 @@ impl ProcessManager {
 
     self.shutting_down = true;
     self.mode = RunningMode::Relax;
-    self.processes.retain(|_, process| process.child.is_some());
+    self.processes.retain(|_, process| process.is_running());
     self.signal_all(Signal::SIGINT, "Stopping...");
     Self::spawn_force_kill(self.tx.clone());
   }
@@ -575,15 +454,6 @@ impl ProcessManager {
 #[cfg(test)]
 mod tests {
   use super::*;
-
-  #[test]
-  fn parse_accepts_indented_comments() {
-    let exclude = Vec::<String>::new();
-    let include = Vec::<String>::new();
-    let input = "  # comment\nweb: echo hi\n";
-    let parsed = ProcessManager::parse_lines(input, &exclude, &include).unwrap();
-    assert_eq!(parsed, vec![("web", "echo hi")]);
-  }
 
   #[test]
   fn from_string_fails_if_no_processes_selected() {
