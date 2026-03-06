@@ -3,6 +3,9 @@ use pty_process::{Command, Pty};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::Child;
 
+const SHELL_ENV: &str = "SHELL";
+const DEFAULT_SHELL: &str = "/bin/sh";
+
 pub struct Process {
   pub(crate) name: String,
   cmd: String,
@@ -22,7 +25,7 @@ impl Process {
 
   pub fn start(&mut self) -> Lines<BufReader<Pty>> {
     let (pty, pts) = pty_process::open().unwrap();
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let shell = std::env::var(SHELL_ENV).unwrap_or_else(|_| DEFAULT_SHELL.to_string());
     let cmd = Command::new(shell).arg("-c").arg(&self.cmd);
     let child = cmd.spawn(pts).unwrap();
 

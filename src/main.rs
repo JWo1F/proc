@@ -7,6 +7,8 @@ mod process;
 mod process_manager;
 mod signal;
 
+const DEFAULT_CONFIG: &str = "Procfile";
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 #[command(after_help = "\
@@ -29,7 +31,7 @@ struct Args {
     long,
     alias = "file",
     short_alias = 'f',
-    default_value = "Procfile"
+    default_value = DEFAULT_CONFIG
   )]
   config: String,
 

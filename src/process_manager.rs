@@ -10,6 +10,12 @@ use std::fmt::Display;
 use tokio::io::{BufReader, Lines};
 use tokio::sync::mpsc;
 
+const COMMENT_PREFIX: char = '#';
+const DISABLED_PREFIX: char = '_';
+const NAME_CMD_SEPARATOR: &str = ":";
+const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
+const COMPACT_INDICATOR: &str = "▌";
+
 #[derive(Debug, Clone, PartialOrd, PartialEq, ValueEnum)]
 pub enum RunningMode {
   /// Restart a process when it exits
@@ -143,13 +149,13 @@ impl ProcessManager {
     let mut errors = Vec::new();
 
     for (n, line) in input.lines().enumerate() {
-      if line.starts_with('#') || line.trim().is_empty() {
+      if line.starts_with(COMMENT_PREFIX) || line.trim().is_empty() {
         continue;
       }
 
       let n = n + 1;
 
-      match line.split_once(":") {
+      match line.split_once(NAME_CMD_SEPARATOR) {
         Some((name, cmd)) => {
           let name = name.trim();
           let cmd = cmd.trim();
@@ -164,7 +170,7 @@ impl ProcessManager {
             continue;
           }
 
-          let (name, disabled) = match name.strip_prefix('_') {
+          let (name, disabled) = match name.strip_prefix(DISABLED_PREFIX) {
             Some(stripped) => (stripped, true),
             None => (name, false),
           };
@@ -276,11 +282,11 @@ impl ProcessManager {
 
     if self.timestamps {
       let now = chrono::Local::now();
-      parts.push(now.format("%H:%M:%S").to_string().color(proc.color).to_string());
+      parts.push(now.format(TIMESTAMP_FORMAT).to_string().color(proc.color).to_string());
     }
 
     if self.compact {
-      parts.push("▌".color(proc.color).to_string());
+      parts.push(COMPACT_INDICATOR.color(proc.color).to_string());
     } else {
       let width = self.name_width;
       parts.push(format!("{:width$} |", proc.name).color(proc.color).to_string());
