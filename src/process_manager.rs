@@ -283,7 +283,7 @@ impl ProcessManager {
       parts.push("▌".color(proc.color).to_string());
     } else {
       let width = self.name_width;
-      parts.push(format!("{:width$} |", proc.name.color(proc.color)));
+      parts.push(format!("{:width$} |", proc.name).color(proc.color).to_string());
     }
 
     format!("{} {}", parts.join(" "), line)
