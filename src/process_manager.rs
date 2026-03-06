@@ -95,7 +95,7 @@ impl ProcessManager {
     };
 
     for (&id, proc) in manager.processes.iter_mut() {
-      let reader = proc.start();
+      let reader = proc.start()?;
       Self::spawn_reader(id, reader, manager.tx.clone());
     }
 
@@ -210,10 +210,21 @@ impl ProcessManager {
     match self.mode {
       RunningMode::Restart => {
         println!("{}", self.compose_system_line(proc, "Restarting..."));
-        let proc = self.processes.get_mut(&id).unwrap();
-        let reader = proc.start();
-        self.log_spawn(&self.processes[&id]);
-        Self::spawn_reader(id, reader, self.tx.clone());
+
+        let Some(proc) = self.processes.get_mut(&id) else {
+          return;
+        };
+
+        match proc.start() {
+          Ok(reader) => {
+            self.log_spawn(&self.processes[&id]);
+            Self::spawn_reader(id, reader, self.tx.clone());
+          }
+          Err(err) => {
+            eprintln!("{}", self.compose_system_line(&self.processes[&id], &err));
+            self.processes.remove(&id);
+          }
+        }
       }
 
       RunningMode::Exit => {
@@ -282,14 +293,26 @@ impl ProcessManager {
 
     if self.timestamps {
       let now = chrono::Local::now();
-      parts.push(now.format(TIMESTAMP_FORMAT).to_string().color(proc.color).to_string());
+
+      parts.push(
+        now
+          .format(TIMESTAMP_FORMAT)
+          .to_string()
+          .color(proc.color)
+          .to_string(),
+      );
     }
 
     if self.compact {
       parts.push(COMPACT_INDICATOR.color(proc.color).to_string());
     } else {
       let width = self.name_width;
-      parts.push(format!("{:width$} |", proc.name).color(proc.color).to_string());
+
+      parts.push(
+        format!("{:width$} |", proc.name)
+          .color(proc.color)
+          .to_string(),
+      );
     }
 
     format!("{} {}", parts.join(" "), line)

@@ -23,15 +23,15 @@ impl Process {
     }
   }
 
-  pub fn start(&mut self) -> Lines<BufReader<Pty>> {
-    let (pty, pts) = pty_process::open().unwrap();
+  pub fn start(&mut self) -> Result<Lines<BufReader<Pty>>, String> {
+    let (pty, pts) = pty_process::open().map_err(|e| format!("Failed to open PTY: {}", e))?;
     let shell = std::env::var(SHELL_ENV).unwrap_or_else(|_| DEFAULT_SHELL.to_string());
     let cmd = Command::new(shell).arg("-c").arg(&self.cmd);
-    let child = cmd.spawn(pts).unwrap();
+    let child = cmd.spawn(pts).map_err(|e| format!("Failed to spawn process: {}", e))?;
 
     self.child = Some(child);
 
-    BufReader::new(pty).lines()
+    Ok(BufReader::new(pty).lines())
   }
 
   pub fn pid(&self) -> Option<u32> {

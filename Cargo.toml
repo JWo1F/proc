@@ -1,6 +1,6 @@
 [package]
 name = "procfile"
-version = "1.4.3"
+version = "1.4.4"
 edition = "2024"
 description = "A process manager that runs commands defined in a Procfile"
 
