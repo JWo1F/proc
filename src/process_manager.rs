@@ -41,6 +41,7 @@ pub struct ProcessManager {
   name_width: usize,
   processes: HashMap<usize, Process>,
   timestamps: bool,
+  compact: bool,
   tx: mpsc::UnboundedSender<Event>,
   rx: mpsc::UnboundedReceiver<Event>,
 }
@@ -63,6 +64,7 @@ impl ProcessManager {
     exclude: &[String],
     include: &[String],
     timestamps: bool,
+    compact: bool,
   ) -> Result<Self, String> {
     let parsed = Self::parse_lines(input, exclude, include)?;
     let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
@@ -81,6 +83,7 @@ impl ProcessManager {
       name_width,
       mode,
       timestamps,
+      compact,
       tx,
       rx,
     };
@@ -200,7 +203,7 @@ impl ProcessManager {
 
     match self.mode {
       RunningMode::Restart => {
-        println!("{}", self.compose_line(proc, "Restarting..."));
+        println!("{}", self.compose_system_line(proc, "Restarting..."));
         let proc = self.processes.get_mut(&id).unwrap();
         let reader = proc.start();
         self.log_spawn(&self.processes[&id]);
@@ -208,13 +211,13 @@ impl ProcessManager {
       }
 
       RunningMode::Exit => {
-        println!("{}", self.compose_line(proc, "Exited"));
+        println!("{}", self.compose_system_line(proc, "Exited"));
         self.processes.remove(&id);
         self.stop();
       }
 
       RunningMode::Relax => {
-        println!("{}", self.compose_line(proc, "Stopped"));
+        println!("{}", self.compose_system_line(proc, "Stopped"));
         self.processes.remove(&id);
       }
     }
@@ -226,7 +229,7 @@ impl ProcessManager {
     for process in self.processes.values() {
       if let Some(child) = &process.child {
         child.signal(Signal::SIGINT);
-        println!("{}", self.compose_line(process, "Stopping..."));
+        println!("{}", self.compose_system_line(process, "Stopping..."));
       }
     }
   }
@@ -259,21 +262,30 @@ impl ProcessManager {
     if let Some(pid) = proc.pid() {
       println!(
         "{}",
-        self.compose_line(proc, &format!("Spawned, pid: {}", pid))
+        self.compose_system_line(proc, &format!("Spawned, pid: {}", pid))
       );
     }
   }
 
+  fn compose_system_line(&self, proc: &Process, line: &str) -> String {
+    self.compose_line(proc, &format!("[{}] {}", proc.name, line))
+  }
+
   fn compose_line(&self, proc: &Process, line: &str) -> String {
-    let name = proc.name.color(proc.color);
-    let width = self.name_width;
+    let mut parts = Vec::new();
 
     if self.timestamps {
       let now = chrono::Local::now();
-      let timestamp = now.format("%H:%M:%S").to_string().color(proc.color);
-      format!("{} | {:width$} | {}", timestamp, name, line)
-    } else {
-      format!("{:width$} | {}", name, line)
+      parts.push(now.format("%H:%M:%S").to_string().color(proc.color).to_string());
     }
+
+    if self.compact {
+      parts.push("▌".color(proc.color).to_string());
+    } else {
+      let width = self.name_width;
+      parts.push(format!("{:width$} |", proc.name.color(proc.color)));
+    }
+
+    format!("{} {}", parts.join(" "), line)
   }
 }

@@ -48,6 +48,10 @@ struct Args {
   /// Prefix each line with a timestamp
   #[arg(short = 'T', long)]
   timestamps: bool,
+
+  /// Hide process names, show only colored |
+  #[arg(short = 's', long)]
+  compact: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -72,6 +76,7 @@ pub async fn main() {
     &args.exclude,
     &args.include,
     args.timestamps,
+    args.compact,
   ) {
     Ok(manager) => manager,
     Err(err) => {
