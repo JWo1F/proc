@@ -24,7 +24,13 @@ Examples:
   procfile -f Procfile.dev -T")]
 struct Args {
   /// Path to the Procfile
-  #[arg(short, long, alias = "file", short_alias = 'f', default_value = "Procfile")]
+  #[arg(
+    short,
+    long,
+    alias = "file",
+    short_alias = 'f',
+    default_value = "Procfile"
+  )]
   config: String,
 
   /// Running mode
@@ -60,7 +66,13 @@ pub async fn main() {
     }
   };
 
-  let mut manager = match ProcessManager::from_string(&config, args.mode, &args.exclude, &args.include, args.timestamps) {
+  let mut manager = match ProcessManager::from_string(
+    &config,
+    args.mode,
+    &args.exclude,
+    &args.include,
+    args.timestamps,
+  ) {
     Ok(manager) => manager,
     Err(err) => {
       eprintln!("Error parsing Procfile\n{}", err);

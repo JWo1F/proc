@@ -27,6 +27,7 @@ impl Process {
     let child = cmd.spawn(pts).unwrap();
 
     self.child = Some(child);
+
     BufReader::new(pty).lines()
   }
 
