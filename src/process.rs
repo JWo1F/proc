@@ -22,7 +22,8 @@ impl Process {
 
   pub fn start(&mut self) -> Lines<BufReader<Pty>> {
     let (pty, pts) = pty_process::open().unwrap();
-    let cmd = Command::new("/bin/bash").arg("-c").arg(&self.cmd);
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+    let cmd = Command::new(shell).arg("-c").arg(&self.cmd);
     let child = cmd.spawn(pts).unwrap();
 
     self.child = Some(child);
