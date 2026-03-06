@@ -1,5 +1,8 @@
 const ESC: u8 = b'\x1B';
 
+/// Strip ANSI escape sequences from PTY output, keeping only color codes (SGR, ending with 'm').
+/// This removes cursor movement, screen clearing, and other terminal control sequences
+/// that would corrupt the multiplexed output while preserving colored text.
 pub fn strip_ansi_except_colors(input: &[u8]) -> Vec<u8> {
   let mut result = Vec::with_capacity(input.len());
   let mut chars = input.iter().copied().enumerate();

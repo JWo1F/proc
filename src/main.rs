@@ -1,6 +1,12 @@
+//! A process manager that runs commands defined in a Procfile.
+//!
+//! Each process is spawned inside its own PTY, and output lines are
+//! multiplexed to stdout with a colored name prefix.
+
 use crate::process_manager::{ProcessManager, RunningMode};
 use clap::Parser;
 use std::fs;
+use std::process::ExitCode;
 
 mod ansi;
 mod process;
@@ -57,7 +63,7 @@ struct Args {
 }
 
 #[tokio::main(flavor = "current_thread")]
-pub async fn main() {
+pub async fn main() -> ExitCode {
   let args = Args::parse();
 
   let config = match fs::read_to_string(&args.config) {
@@ -68,7 +74,8 @@ pub async fn main() {
         std::io::ErrorKind::InvalidData => eprintln!("{}: not a valid text file", args.config),
         _ => eprintln!("Error reading {}: {}", args.config, err),
       }
-      return;
+
+      return 2.into();
     }
   };
 
@@ -83,9 +90,9 @@ pub async fn main() {
     Ok(manager) => manager,
     Err(err) => {
       eprintln!("Error parsing Procfile\n{}", err);
-      return;
+      return 2.into();
     }
   };
 
-  manager.start().await;
+  manager.start().await.into()
 }

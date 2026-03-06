@@ -7,16 +7,22 @@ use nix::sys::signal::Signal;
 use pty_process::Pty;
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::os::unix::process::ExitStatusExt;
+use std::process::ExitStatus;
+use std::time::Duration;
 use tokio::io::{BufReader, Lines};
 use tokio::sync::mpsc;
+use tokio::time::sleep;
 
 const COMMENT_PREFIX: char = '#';
 const DISABLED_PREFIX: char = '_';
 const NAME_CMD_SEPARATOR: &str = ":";
 const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
 const COMPACT_INDICATOR: &str = "▌";
+/// How long to wait after SIGINT before sending SIGKILL.
+const SIGKILL_GRACE_SECS: u64 = 5;
 
-#[derive(Debug, Clone, PartialOrd, PartialEq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, ValueEnum)]
 pub enum RunningMode {
   /// Restart a process when it exits
   Restart,
@@ -36,22 +42,46 @@ impl Display for RunningMode {
   }
 }
 
+/// All events funnelled through a single mpsc channel into the main loop.
 enum Event {
+  /// A line of output from process `id`.
   Line(usize, String),
-  EOF(usize),
+  /// Process `id` PTY closed (process exited).
+  ProcessEnded(usize),
+  /// Delayed restart timer fired for process `id`.
+  Restart(usize),
+  /// Ctrl+C signal received.
   CtrlC,
+  /// Grace period expired — time to SIGKILL remaining processes.
+  ForceKill,
 }
 
+/// Owns all child processes and drives the main event loop.
+///
+/// Lifecycle: `from_string()` parses the Procfile and builds the manager,
+/// then `start()` spawns everything and blocks until all processes are done.
 pub struct ProcessManager {
+  /// Current running mode (may switch to Relax during shutdown).
   mode: RunningMode,
+  /// Longest process name length, used to align log prefixes.
   name_width: usize,
+  /// Active processes keyed by their index from the Procfile.
   processes: HashMap<usize, Process>,
+  /// Whether to prefix each output line with a timestamp.
   timestamps: bool,
+  /// Compact mode: show a colored block instead of the process name.
   compact: bool,
+  /// Sender half of the event channel — cloned into background tasks.
   tx: mpsc::UnboundedSender<Event>,
+  /// Receiver half — consumed exclusively by the main event loop.
   rx: mpsc::UnboundedReceiver<Event>,
+  /// Set when any process exits with a non-zero status.
+  failed: bool,
+  /// Set once graceful shutdown has been initiated (SIGINT sent).
+  shutting_down: bool,
 }
 
+/// Color palette cycled across processes for visual distinction.
 static COLORS: [Color; 8] = [
   Color::Red,
   Color::Green,
@@ -64,6 +94,7 @@ static COLORS: [Color; 8] = [
 ];
 
 impl ProcessManager {
+  /// Parse a Procfile string and build a manager. Does not start processes yet.
   pub fn from_string(
     input: &str,
     mode: RunningMode,
@@ -73,8 +104,12 @@ impl ProcessManager {
     compact: bool,
   ) -> Result<Self, String> {
     let parsed = Self::parse_lines(input, exclude, include)?;
-    let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
 
+    if parsed.is_empty() {
+      return Err("No processes selected after applying include/exclude filters".to_string());
+    }
+
+    let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
     let (tx, rx) = mpsc::unbounded_channel();
 
     let processes: HashMap<usize, Process> = parsed
@@ -84,7 +119,7 @@ impl ProcessManager {
       .map(|(i, name, cmd, color)| (i, Process::new(name, cmd, color)))
       .collect();
 
-    let mut manager = Self {
+    Ok(Self {
       processes,
       name_width,
       mode,
@@ -92,22 +127,12 @@ impl ProcessManager {
       compact,
       tx,
       rx,
-    };
-
-    for (&id, proc) in manager.processes.iter_mut() {
-      let reader = proc.start()?;
-      Self::spawn_reader(id, reader, manager.tx.clone());
-    }
-
-    for proc in manager.processes.values() {
-      manager.log_spawn(proc);
-    }
-
-    Self::spawn_ctrlc(manager.tx.clone());
-
-    Ok(manager)
+      failed: false,
+      shutting_down: false,
+    })
   }
 
+  /// Read lines from a PTY and forward them as `Event::Line` / `Event::ProcessEnded`.
   fn spawn_reader(id: usize, mut reader: Lines<BufReader<Pty>>, tx: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
       loop {
@@ -120,12 +145,12 @@ impl ProcessManager {
             }
           }
           Ok(None) => {
-            let _ = tx.send(Event::EOF(id));
+            let _ = tx.send(Event::ProcessEnded(id));
             break;
           }
           Err(err) => {
             eprintln!("Error reading process output: {}", err);
-            let _ = tx.send(Event::EOF(id));
+            let _ = tx.send(Event::ProcessEnded(id));
             break;
           }
         }
@@ -133,13 +158,39 @@ impl ProcessManager {
     });
   }
 
-  fn spawn_ctrlc(tx: mpsc::UnboundedSender<Event>) {
+  /// Schedule a `Event::Restart` after `delay`.
+  fn spawn_restart(id: usize, delay: Duration, tx: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
-      let _ = tokio::signal::ctrl_c().await;
-      let _ = tx.send(Event::CtrlC);
+      sleep(delay).await;
+      let _ = tx.send(Event::Restart(id));
     });
   }
 
+  /// Listen for Ctrl+C in a loop (each signal sends a new `Event::CtrlC`).
+  fn spawn_ctrlc(tx: mpsc::UnboundedSender<Event>) {
+    tokio::spawn(async move {
+      loop {
+        if tokio::signal::ctrl_c().await.is_err() {
+          break;
+        }
+
+        if tx.send(Event::CtrlC).is_err() {
+          break;
+        }
+      }
+    });
+  }
+
+  /// One-shot timer: sends `Event::ForceKill` after the SIGKILL grace period.
+  fn spawn_force_kill(tx: mpsc::UnboundedSender<Event>) {
+    tokio::spawn(async move {
+      sleep(Duration::from_secs(SIGKILL_GRACE_SECS)).await;
+      let _ = tx.send(Event::ForceKill);
+    });
+  }
+
+  /// Parse Procfile lines into (name, cmd) pairs, applying exclude/include filters.
+  /// Lines starting with `#` are comments; names starting with `_` are disabled by default.
   fn parse_lines<'a>(
     input: &'a str,
     exclude: &[String],
@@ -149,7 +200,9 @@ impl ProcessManager {
     let mut errors = Vec::new();
 
     for (n, line) in input.lines().enumerate() {
-      if line.starts_with(COMMENT_PREFIX) || line.trim().is_empty() {
+      let trimmed = line.trim();
+
+      if trimmed.is_empty() || trimmed.starts_with(COMMENT_PREFIX) {
         continue;
       }
 
@@ -185,7 +238,6 @@ impl ProcessManager {
 
           result.push((name, cmd));
         }
-
         None => {
           errors.push(format!(
             "Line {} should contain name and command:\n> {}",
@@ -202,79 +254,259 @@ impl ProcessManager {
     }
   }
 
-  fn handle_exit(&mut self, id: usize) {
-    let Some(proc) = self.processes.get(&id) else {
-      return;
+  /// Process IDs in deterministic order (for consistent log output).
+  fn sorted_ids(&self) -> Vec<usize> {
+    let mut ids: Vec<_> = self.processes.keys().copied().collect();
+    ids.sort_unstable();
+    ids
+  }
+
+  /// Spawn a single process and attach a PTY reader.
+  fn start_one(&mut self, id: usize) -> Result<(), String> {
+    let reader = {
+      let Some(proc) = self.processes.get_mut(&id) else {
+        return Ok(());
+      };
+
+      proc.start()?
+    };
+
+    Self::spawn_reader(id, reader, self.tx.clone());
+
+    if let Some(proc) = self.processes.get(&id) {
+      self.log_spawn(proc);
+    }
+
+    Ok(())
+  }
+
+  /// Start every process. On first failure, stop all already-started ones.
+  fn start_all(&mut self) {
+    for id in self.sorted_ids() {
+      if let Err(err) = self.start_one(id) {
+        self.failed = true;
+
+        if let Some(proc) = self.processes.get(&id) {
+          eprintln!("{}", self.compose_system_line(proc, &err));
+        } else {
+          eprintln!("Error starting process {}: {}", id, err);
+        }
+
+        self.processes.remove(&id);
+        self.processes.retain(|_, process| process.child.is_some());
+
+        if !self.processes.is_empty() {
+          self.stop();
+        }
+        break;
+      }
+    }
+  }
+
+  /// Take the child handle and collect its exit status.
+  async fn take_child_status(proc: &mut Process) -> Option<ExitStatus> {
+    let mut child = proc.child.take()?;
+
+    match child.try_wait() {
+      Ok(Some(status)) => Some(status),
+      Ok(None) => match child.wait().await {
+        Ok(status) => Some(status),
+        Err(err) => {
+          eprintln!("Error waiting process [{}]: {}", proc.name, err);
+          None
+        }
+      },
+      Err(err) => {
+        eprintln!("Error checking process [{}] status: {}", proc.name, err);
+        None
+      }
+    }
+  }
+
+  /// Build a human-readable exit description: code, signal name, or just "Exited".
+  fn format_exit_status(status: Option<&ExitStatus>) -> String {
+    let Some(status) = status else {
+      return "Exited".to_string();
+    };
+
+    if status.success() {
+      return "Exited".to_string();
+    }
+
+    if let Some(code) = status.code() {
+      return format!("Exited with code {}", code);
+    }
+
+    if let Some(signal) = status.signal() {
+      return format!("Exited from signal {}", signal);
+    }
+
+    "Exited".to_string()
+  }
+
+  /// React to a process exit according to the current running mode.
+  async fn handle_exit(&mut self, id: usize) {
+    let (exit_success, exit_message) = {
+      let Some(proc) = self.processes.get_mut(&id) else {
+        return;
+      };
+
+      let status = Self::take_child_status(proc).await;
+      let exit_success = status.as_ref().is_some_and(ExitStatus::success);
+      let exit_message = Self::format_exit_status(status.as_ref());
+
+      (exit_success, exit_message)
     };
 
     match self.mode {
       RunningMode::Restart => {
-        println!("{}", self.compose_system_line(proc, "Restarting..."));
+        if let Some(proc) = self.processes.get(&id) {
+          println!("{}", self.compose_system_line(proc, &exit_message));
+        }
 
-        let Some(proc) = self.processes.get_mut(&id) else {
-          return;
-        };
+        // Process stays in the map (child=None) while waiting for the restart timer.
+        // If shutdown happens in between, stop() removes childless entries via retain().
+        let delay: Option<Duration> = self
+          .processes
+          .get_mut(&id)
+          .map(|proc| proc.next_restart_delay());
 
-        match proc.start() {
-          Ok(reader) => {
-            self.log_spawn(&self.processes[&id]);
-            Self::spawn_reader(id, reader, self.tx.clone());
+        if let Some(delay) = delay {
+          if let Some(proc) = self.processes.get(&id) {
+            println!(
+              "{}",
+              self.compose_system_line(proc, &format!("Restarting in {}ms...", delay.as_millis()))
+            );
           }
-          Err(err) => {
-            eprintln!("{}", self.compose_system_line(&self.processes[&id], &err));
-            self.processes.remove(&id);
-          }
+
+          Self::spawn_restart(id, delay, self.tx.clone());
         }
       }
-
       RunningMode::Exit => {
-        println!("{}", self.compose_system_line(proc, "Exited"));
+        if !exit_success {
+          self.failed = true;
+        }
+
+        if let Some(proc) = self.processes.get(&id) {
+          println!("{}", self.compose_system_line(proc, &exit_message));
+        }
+
         self.processes.remove(&id);
         self.stop();
       }
-
       RunningMode::Relax => {
-        println!("{}", self.compose_system_line(proc, "Stopped"));
+        // Don't count failures caused by our own shutdown signals.
+        if !exit_success && !self.shutting_down {
+          self.failed = true;
+        }
+
+        let message = if self.shutting_down {
+          "Stopped"
+        } else {
+          &exit_message
+        };
+
+        if let Some(proc) = self.processes.get(&id) {
+          println!("{}", self.compose_system_line(proc, message));
+        }
+
         self.processes.remove(&id);
       }
     }
   }
 
-  pub fn stop(&mut self) {
-    self.mode = RunningMode::Relax;
+  /// Called when a restart timer fires. Starts the process again (or drops it on failure).
+  fn handle_restart(&mut self, id: usize) {
+    if self.mode != RunningMode::Restart || self.shutting_down {
+      self.processes.remove(&id);
+      return;
+    }
 
-    for process in self.processes.values() {
+    if let Err(err) = self.start_one(id) {
+      self.failed = true;
+
+      if let Some(proc) = self.processes.get(&id) {
+        eprintln!("{}", self.compose_system_line(proc, &err));
+      } else {
+        eprintln!("Error restarting process {}: {}", id, err);
+      }
+
+      self.processes.remove(&id);
+    }
+  }
+
+  /// Send a signal to every process that still has a running child.
+  fn signal_all(&self, signal: Signal, message: &str) {
+    for id in self.sorted_ids() {
+      let Some(process) = self.processes.get(&id) else {
+        continue;
+      };
+
       if let Some(child) = &process.child {
-        child.signal(Signal::SIGINT);
-        println!("{}", self.compose_system_line(process, "Stopping..."));
+        child.signal(signal);
+        println!("{}", self.compose_system_line(process, message));
       }
     }
   }
 
-  pub async fn start(&mut self) {
-    while let Some(event) = self.rx.recv().await {
+  /// Begin graceful shutdown: send SIGINT, schedule a SIGKILL fallback,
+  /// and switch mode to Relax so no more restarts happen.
+  fn stop(&mut self) {
+    if self.shutting_down {
+      return;
+    }
+
+    self.shutting_down = true;
+    self.mode = RunningMode::Relax;
+    self.processes.retain(|_, process| process.child.is_some());
+    self.signal_all(Signal::SIGINT, "Stopping...");
+    Self::spawn_force_kill(self.tx.clone());
+  }
+
+  /// First Ctrl+C starts graceful shutdown; second one sends SIGKILL immediately.
+  fn handle_ctrlc(&mut self) {
+    if !self.shutting_down {
+      println!("\nCtrl+C received, stopping processes...");
+      self.stop();
+    } else {
+      println!("Ctrl+C received again, killing processes...");
+      self.signal_all(Signal::SIGKILL, "Killing...");
+    }
+  }
+
+  /// 0 if all processes exited cleanly, 1 if any failed.
+  fn exit_code(&self) -> u8 {
+    if self.failed { 1 } else { 0 }
+  }
+
+  /// Main event loop. Spawns all processes, then dispatches events
+  /// until every process has exited and been removed from the map.
+  pub async fn start(&mut self) -> u8 {
+    Self::spawn_ctrlc(self.tx.clone());
+    self.start_all();
+
+    while !self.processes.is_empty() {
+      let Some(event) = self.rx.recv().await else {
+        break;
+      };
+
       match event {
         Event::Line(id, line) => {
           if let Some(proc) = self.processes.get(&id) {
             println!("{}", self.compose_line(proc, &line));
           }
         }
-
-        Event::EOF(id) => {
-          self.handle_exit(id);
-          if self.processes.is_empty() {
-            break;
-          }
-        }
-
-        Event::CtrlC => {
-          println!("\nCtrl+C received, stopping processes...");
-          self.stop();
-        }
+        Event::ProcessEnded(id) => self.handle_exit(id).await,
+        Event::Restart(id) => self.handle_restart(id),
+        Event::CtrlC => self.handle_ctrlc(),
+        Event::ForceKill => self.signal_all(Signal::SIGKILL, "Killing..."),
       }
     }
+
+    self.exit_code()
   }
 
+  /// Print a "Spawned, pid: ..." message for a newly started process.
   fn log_spawn(&self, proc: &Process) {
     if let Some(pid) = proc.pid() {
       println!(
@@ -284,16 +516,17 @@ impl ProcessManager {
     }
   }
 
+  /// Format a system message like "[web] Stopping..." with the process prefix.
   fn compose_system_line(&self, proc: &Process, line: &str) -> String {
     self.compose_line(proc, &format!("[{}] {}", proc.name, line))
   }
 
+  /// Format an output line with the colored process name prefix (and optional timestamp).
   fn compose_line(&self, proc: &Process, line: &str) -> String {
     let mut parts = Vec::new();
 
     if self.timestamps {
       let now = chrono::Local::now();
-
       parts.push(
         now
           .format(TIMESTAMP_FORMAT)
@@ -307,7 +540,6 @@ impl ProcessManager {
       parts.push(COMPACT_INDICATOR.color(proc.color).to_string());
     } else {
       let width = self.name_width;
-
       parts.push(
         format!("{:width$} |", proc.name)
           .color(proc.color)
@@ -316,5 +548,34 @@ impl ProcessManager {
     }
 
     format!("{} {}", parts.join(" "), line)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn parse_accepts_indented_comments() {
+    let exclude = Vec::<String>::new();
+    let include = Vec::<String>::new();
+    let input = "  # comment\nweb: echo hi\n";
+    let parsed = ProcessManager::parse_lines(input, &exclude, &include).unwrap();
+    assert_eq!(parsed, vec![("web", "echo hi")]);
+  }
+
+  #[test]
+  fn from_string_fails_if_no_processes_selected() {
+    let exclude = vec!["web".to_string()];
+    let include = Vec::<String>::new();
+    let input = "web: echo hi\n";
+
+    let manager =
+      ProcessManager::from_string(input, RunningMode::Exit, &exclude, &include, false, false);
+
+    match manager {
+      Ok(_) => panic!("expected no-processes error"),
+      Err(err) => assert!(err.contains("No processes selected")),
+    }
   }
 }

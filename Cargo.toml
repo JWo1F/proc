@@ -1,11 +1,11 @@
 [package]
 name = "procfile"
-version = "1.4.4"
+version = "1.5.0"
 edition = "2024"
 description = "A process manager that runs commands defined in a Procfile"
 
 [dependencies]
-tokio = { version = "1.44.2", features = ["macros", "process", "rt", "io-util", "signal", "sync"] }
+tokio = { version = "1.44.2", features = ["macros", "process", "rt", "io-util", "signal", "sync", "time"] }
 colored = "3.0.0"
 pty-process = { version = "0.5.1", features = ["async"] }
 nix = { version = "0.30.1", features = ["signal"] }
