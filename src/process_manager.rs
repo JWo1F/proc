@@ -251,7 +251,7 @@ impl ProcessManager {
         }
 
         Event::CtrlC => {
-          println!("Ctrl+C received, stopping processes...");
+          println!("\nCtrl+C received, stopping processes...");
           self.stop();
         }
       }
