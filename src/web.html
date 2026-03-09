@@ -15,8 +15,9 @@
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
     body { font-family: 'Inter', system-ui, sans-serif; }
     .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
-    .log-line { min-height: 1.5rem; }
+    .log-line { height: 24px; overflow: hidden; }
     .log-line:hover { background: var(--hover-bg); }
+    .log-line.expanded { height: auto; min-height: 24px; }
     :root { --hover-bg: rgba(0,0,0,0.03); }
     .dark { --hover-bg: rgba(255,255,255,0.04); }
     #log-container::-webkit-scrollbar { width: 8px; }
@@ -166,8 +167,8 @@
   </header>
 
   <!-- Log container -->
-  <div id="log-container" class="flex-1 overflow-y-auto bg-white dark:bg-gray-950 px-4 py-2">
-    <div id="log-list" class="space-y-0"></div>
+  <div id="log-container" class="flex-1 overflow-y-auto bg-white dark:bg-gray-950 px-4">
+    <div id="log-viewport" style="position: relative;"></div>
     <div id="empty-state" class="flex flex-col items-center justify-center h-full text-gray-400 dark:text-gray-600">
       <svg class="w-12 h-12 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
@@ -185,7 +186,7 @@
   </footer>
 
   <script>
-    const logList = document.getElementById('log-list');
+    const logViewport = document.getElementById('log-viewport');
     const logContainer = document.getElementById('log-container');
     const searchInput = document.getElementById('search-input');
     const searchClear = document.getElementById('search-clear');
@@ -220,6 +221,86 @@
     let knownProcesses = new Map(); // name -> color
     let hiddenProcesses = new Set();
     let eventSource = null;
+
+    // Virtual scroll — fixed row height, block-based rendering
+    const ROW_HEIGHT = 24;
+    const BLOCK_SIZE = 100;
+    const OVERSCAN = 30;
+    let filteredLogs = [];  // indices into allLogs matching current filter
+    let renderedBlocks = new Map(); // blockIndex -> DOM element
+    let scrollRafId = null;
+
+    function clearBlocks() {
+      for (const el of renderedBlocks.values()) el.remove();
+      renderedBlocks.clear();
+    }
+
+    // Create a block element containing BLOCK_SIZE rows
+    function createBlock(blockIdx) {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:absolute;left:0;right:0;top:' + (blockIdx * BLOCK_SIZE * ROW_HEIGHT) + 'px';
+
+      const rowStart = blockIdx * BLOCK_SIZE;
+      const rowEnd = Math.min(rowStart + BLOCK_SIZE, filteredLogs.length);
+
+      for (let i = rowStart; i < rowEnd; i++) {
+        el.appendChild(createLogElement(allLogs[filteredLogs[i]], false));
+      }
+
+      return el;
+    }
+
+    // Render only blocks that overlap the viewport + overscan
+    function renderVisible() {
+      const totalRows = filteredLogs.length;
+      logViewport.style.height = (totalRows * ROW_HEIGHT) + 'px';
+      emptyState.classList.toggle('hidden', allLogs.length > 0);
+
+      if (totalRows === 0) {
+        clearBlocks();
+        updateCounts(0);
+        return;
+      }
+
+      const scrollTop = logContainer.scrollTop;
+      const viewportHeight = logContainer.clientHeight;
+
+      let startRow = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
+      let endRow = Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN;
+      startRow = Math.max(0, startRow);
+      endRow = Math.min(totalRows, endRow);
+
+      const startBlock = Math.floor(startRow / BLOCK_SIZE);
+      const endBlock = Math.floor((endRow - 1) / BLOCK_SIZE);
+
+      // Remove blocks that scrolled out of range
+      for (const [idx, el] of renderedBlocks) {
+        if (idx < startBlock || idx > endBlock) {
+          el.remove();
+          renderedBlocks.delete(idx);
+        }
+      }
+
+      // Add blocks that scrolled into range
+      for (let b = startBlock; b <= endBlock; b++) {
+        if (renderedBlocks.has(b)) continue;
+        const el = createBlock(b);
+        logViewport.appendChild(el);
+        renderedBlocks.set(b, el);
+      }
+
+      updateCounts(filteredLogs.length);
+    }
+
+    // Rebuild filteredLogs from scratch (after search/filter change)
+    function rebuildFilteredLogs() {
+      filteredLogs = [];
+      for (let i = 0; i < allLogs.length; i++) {
+        if (matchesFilter(allLogs[i])) {
+          filteredLogs.push(i);
+        }
+      }
+    }
 
     // Theme
     function getTheme() {
@@ -257,29 +338,36 @@
     let scrollDebounce = null;
     let programmaticScroll = false;
     logContainer.addEventListener('scroll', () => {
-      if (programmaticScroll) return;
-      const { scrollTop, scrollHeight, clientHeight } = logContainer;
-      const distFromBottom = scrollHeight - scrollTop - clientHeight;
-      if (distFromBottom > 40 && autoScroll) {
-        autoScroll = false;
-        updateAutoScrollBtn();
+      // Auto-scroll detection (only for user-initiated scrolls)
+      if (!programmaticScroll) {
+        const { scrollTop, scrollHeight, clientHeight } = logContainer;
+        const distFromBottom = scrollHeight - scrollTop - clientHeight;
+        if (distFromBottom > 40 && autoScroll) {
+          autoScroll = false;
+          updateAutoScrollBtn();
+        }
+        if (distFromBottom <= 1 && !autoScroll) {
+          clearTimeout(scrollDebounce);
+          scrollDebounce = setTimeout(() => {
+            if (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 1) {
+              autoScroll = true;
+              updateAutoScrollBtn();
+            }
+          }, 150);
+        }
       }
-      // Re-enable auto-scroll when user reaches the very bottom, debounced
-      if (distFromBottom <= 1 && !autoScroll) {
-        clearTimeout(scrollDebounce);
-        scrollDebounce = setTimeout(() => {
-          if (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 1) {
-            autoScroll = true;
-            updateAutoScrollBtn();
-          }
-        }, 150);
+      // Throttled virtual scroll render on every scroll
+      if (scrollRafId === null) {
+        scrollRafId = requestAnimationFrame(() => {
+          scrollRafId = null;
+          renderVisible();
+        });
       }
     });
 
     function scrollToBottom() {
       programmaticScroll = true;
       logContainer.scrollTop = logContainer.scrollHeight;
-      // Reset flag after browser processes the scroll event
       requestAnimationFrame(() => { programmaticScroll = false; });
     }
 
@@ -399,7 +487,7 @@
       div.dataset.process = entry.process;
 
       const idx = document.createElement('span');
-      idx.className = 'flex-none w-12 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed';
+      idx.className = 'flex-none w-20 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed';
       idx.textContent = '0x' + entry.index.toString(16).toUpperCase();
 
       const ts = document.createElement('span');
@@ -412,7 +500,7 @@
       proc.textContent = entry.process;
 
       const content = document.createElement('span');
-      content.className = 'flex-1 min-w-0 break-all leading-relaxed whitespace-pre-wrap';
+      content.className = 'flex-1 min-w-0 leading-relaxed whitespace-pre overflow-hidden text-ellipsis';
       if (entry.system) {
         content.classList.add('font-medium');
         content.style.color = entry.color;
@@ -423,6 +511,20 @@
       } else {
         content.innerHTML = entry.html;
       }
+
+      // Click index to expand/collapse long lines
+      idx.style.cursor = 'pointer';
+      idx.addEventListener('click', (e) => {
+        e.stopPropagation();
+        div.classList.toggle('expanded');
+        if (div.classList.contains('expanded')) {
+          content.classList.remove('overflow-hidden', 'text-ellipsis', 'whitespace-pre');
+          content.classList.add('whitespace-pre-wrap', 'break-all');
+        } else {
+          content.classList.add('overflow-hidden', 'text-ellipsis', 'whitespace-pre');
+          content.classList.remove('whitespace-pre-wrap', 'break-all');
+        }
+      });
 
       div.appendChild(idx);
       div.appendChild(ts);
@@ -444,25 +546,15 @@
     }
 
     function renderAllLogs() {
-      logList.innerHTML = '';
-      const fragment = document.createDocumentFragment();
-      let visibleCount = 0;
-
-      for (const entry of allLogs) {
-        if (!matchesFilter(entry)) continue;
-        fragment.appendChild(createLogElement(entry, false));
-        visibleCount++;
-      }
-
-      logList.appendChild(fragment);
-      emptyState.classList.toggle('hidden', allLogs.length > 0);
-      updateCounts(visibleCount);
-      if (autoScroll) requestAnimationFrame(scrollToBottom);
+      rebuildFilteredLogs();
+      clearBlocks();
+      renderVisible();
+      if (autoScroll) scrollToBottom();
     }
 
     function updateCounts(visibleOverride) {
       const total = allLogs.length;
-      const visible = visibleOverride !== undefined ? visibleOverride : logList.children.length;
+      const visible = visibleOverride !== undefined ? visibleOverride : filteredLogs.length;
       logCountEl.textContent = `${total} lines`;
 
       const hasFilter = searchQuery || hiddenProcesses.size > 0;
@@ -655,45 +747,39 @@
       const batch = pendingEntries;
       pendingEntries = [];
 
-      // If there's an active filter, some entries may not match — check if a full re-render is cheaper
-      const hasFilter = searchQuery || hiddenProcesses.size > 0;
-
-      if (emptyState && allLogs.length > 0) {
-        emptyState.classList.add('hidden');
+      // Append matching entries to filteredLogs
+      const prevTotal = filteredLogs.length;
+      const startAllIdx = allLogs.length - batch.length;
+      for (let i = 0; i < batch.length; i++) {
+        if (matchesFilter(batch[i])) {
+          filteredLogs.push(startAllIdx + i);
+        }
       }
 
-      const animate = batch.length <= 5;
+      emptyState.classList.toggle('hidden', allLogs.length > 0);
 
-      if (!hasFilter) {
-        // Fast path: just append all new entries
-        const fragment = document.createDocumentFragment();
-        for (const entry of batch) {
-          fragment.appendChild(createLogElement(entry, animate));
-        }
-        logList.appendChild(fragment);
-        updateCounts();
-      } else {
-        // With filters: append only matching entries
-        const fragment = document.createDocumentFragment();
-        let added = 0;
-        for (const entry of batch) {
-          if (matchesFilter(entry)) {
-            fragment.appendChild(createLogElement(entry, animate));
-            added++;
-          }
-        }
-        if (added > 0) logList.appendChild(fragment);
-        updateCounts();
+      // Invalidate the last block — it may now have more rows
+      if (prevTotal > 0) {
+        const lastBlock = Math.floor((prevTotal - 1) / BLOCK_SIZE);
+        const el = renderedBlocks.get(lastBlock);
+        if (el) { el.remove(); renderedBlocks.delete(lastBlock); }
       }
+
+      // Update viewport height for scrollbar
+      logViewport.style.height = (filteredLogs.length * ROW_HEIGHT) + 'px';
 
       if (autoScroll) scrollToBottom();
+
+      renderVisible();
     }
 
     function connectSSE() {
       if (eventSource) eventSource.close();
       allLogs = [];
+      filteredLogs = [];
       pendingEntries = [];
-      logList.innerHTML = '';
+      clearBlocks();
+      logViewport.style.height = '0px';
       eventSource = new EventSource('/api/sse');
 
       eventSource.addEventListener('init', (e) => {
