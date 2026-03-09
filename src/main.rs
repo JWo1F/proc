@@ -7,12 +7,16 @@ use crate::process_manager::{ProcessManager, RunningMode};
 use clap::Parser;
 use std::fs;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 mod ansi;
 mod color;
+mod log_store;
 mod process;
 mod process_manager;
 mod procfile;
+#[cfg(feature = "web")]
+mod web;
 
 const DEFAULT_CONFIG: &str = "Procfile";
 
@@ -61,6 +65,11 @@ struct Args {
   /// Hide process names, show only colored |
   #[arg(short = 's', long)]
   compact: bool,
+
+  /// Start web UI (optional port, default: derived from folder name)
+  #[cfg(feature = "web")]
+  #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "0")]
+  web: Option<u16>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -80,6 +89,8 @@ pub async fn main() -> ExitCode {
     }
   };
 
+  let log_store = Arc::new(log_store::LogStore::new());
+
   let mut manager = match ProcessManager::from_string(
     &config,
     args.mode,
@@ -87,6 +98,7 @@ pub async fn main() -> ExitCode {
     &args.include,
     args.timestamps,
     args.compact,
+    Arc::clone(&log_store),
   ) {
     Ok(manager) => manager,
     Err(err) => {
@@ -94,6 +106,19 @@ pub async fn main() -> ExitCode {
       return 2.into();
     }
   };
+
+  #[cfg(feature = "web")]
+  if let Some(port) = args.web {
+    let store = Arc::clone(&log_store);
+    let resolved_port = if port == 0 {
+      web::port_for_cwd()
+    } else {
+      port
+    };
+    tokio::spawn(async move {
+      web::start(store, resolved_port).await;
+    });
+  }
 
   manager.start().await.into()
 }

@@ -1,5 +1,6 @@
 use crate::ansi;
-use crate::color::color_for_index;
+use crate::color::{color_for_index, color_to_css};
+use crate::log_store::LogStore;
 use crate::process::Process;
 use crate::procfile;
 use clap::ValueEnum;
@@ -10,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{BufReader, Lines};
 use tokio::sync::mpsc;
@@ -77,6 +79,8 @@ pub struct ProcessManager {
   failed: bool,
   /// Set once graceful shutdown has been initiated (SIGINT sent).
   shutting_down: bool,
+  /// Shared log store for web UI.
+  log_store: Arc<LogStore>,
 }
 
 impl ProcessManager {
@@ -88,6 +92,7 @@ impl ProcessManager {
     include: &[String],
     timestamps: bool,
     compact: bool,
+    log_store: Arc<LogStore>,
   ) -> Result<Self, String> {
     let parsed = procfile::parse(input, exclude, include)?;
 
@@ -114,6 +119,7 @@ impl ProcessManager {
       rx,
       failed: false,
       shutting_down: false,
+      log_store,
     })
   }
 
@@ -207,7 +213,7 @@ impl ProcessManager {
         self.failed = true;
 
         if let Some(proc) = self.processes.get(&id) {
-          eprintln!("{}", self.compose_system_line(proc, &err));
+          self.print_system_line(proc, &err);
         } else {
           eprintln!("Error starting process {}: {}", id, err);
         }
@@ -261,7 +267,7 @@ impl ProcessManager {
     match self.mode {
       RunningMode::Restart => {
         if let Some(proc) = self.processes.get(&id) {
-          println!("{}", self.compose_system_line(proc, &exit_message));
+          self.print_system_line(proc, &exit_message);
         }
 
         // Process stays in the map (child=None) while waiting for the restart timer.
@@ -273,10 +279,7 @@ impl ProcessManager {
 
         if let Some(delay) = delay {
           if let Some(proc) = self.processes.get(&id) {
-            println!(
-              "{}",
-              self.compose_system_line(proc, &format!("Restarting in {}ms...", delay.as_millis()))
-            );
+            self.print_system_line(proc, &format!("Restarting in {}ms...", delay.as_millis()));
           }
 
           Self::spawn_restart(id, delay, self.tx.clone());
@@ -288,7 +291,7 @@ impl ProcessManager {
         }
 
         if let Some(proc) = self.processes.get(&id) {
-          println!("{}", self.compose_system_line(proc, &exit_message));
+          self.print_system_line(proc, &exit_message);
         }
 
         self.processes.remove(&id);
@@ -307,7 +310,7 @@ impl ProcessManager {
         };
 
         if let Some(proc) = self.processes.get(&id) {
-          println!("{}", self.compose_system_line(proc, message));
+          self.print_system_line(proc, message);
         }
 
         self.processes.remove(&id);
@@ -326,7 +329,7 @@ impl ProcessManager {
       self.failed = true;
 
       if let Some(proc) = self.processes.get(&id) {
-        eprintln!("{}", self.compose_system_line(proc, &err));
+        self.print_system_line(proc, &err);
       } else {
         eprintln!("Error restarting process {}: {}", id, err);
       }
@@ -344,7 +347,7 @@ impl ProcessManager {
 
       if process.is_running() {
         process.signal(signal);
-        println!("{}", self.compose_system_line(process, message));
+        self.print_system_line(process, message);
       }
     }
   }
@@ -394,6 +397,7 @@ impl ProcessManager {
         Event::Line(id, line) => {
           if let Some(proc) = self.processes.get(&id) {
             println!("{}", self.compose_line(proc, &line));
+            self.store_log(proc, &line, false);
           }
         }
         Event::ProcessEnded(id) => self.handle_exit(id).await,
@@ -409,16 +413,31 @@ impl ProcessManager {
   /// Print a "Spawned, pid: ..." message for a newly started process.
   fn log_spawn(&self, proc: &Process) {
     if let Some(pid) = proc.pid() {
-      println!(
-        "{}",
-        self.compose_system_line(proc, &format!("Spawned, pid: {}", pid))
-      );
+      self.print_system_line(proc, &format!("Spawned, pid: {}", pid));
     }
   }
 
   /// Format a system message like "[web] Stopping..." with the process prefix.
   fn compose_system_line(&self, proc: &Process, line: &str) -> String {
     self.compose_line(proc, &format!("[{}] {}", proc.name, line))
+  }
+
+  /// Print and store a system message like "[web] Stopping...".
+  fn print_system_line(&self, proc: &Process, message: &str) {
+    println!("{}", self.compose_system_line(proc, message));
+    let decorated = format!("[{}] {}", proc.name, message);
+    self.store_log(proc, &decorated, true);
+  }
+
+  /// Push a log entry to the shared store for the web UI.
+  fn store_log(&self, proc: &Process, line: &str, system: bool) {
+    let timestamp = chrono::Local::now()
+      .format(TIMESTAMP_FORMAT)
+      .to_string();
+    let css_color = color_to_css(&proc.color);
+    self
+      .log_store
+      .push(&proc.name, &css_color, line, &timestamp, system);
   }
 
   /// Format an output line with the colored process name prefix (and optional timestamp).
@@ -461,8 +480,9 @@ mod tests {
     let include = Vec::<String>::new();
     let input = "web: echo hi\n";
 
+    let log_store = Arc::new(LogStore::new());
     let manager =
-      ProcessManager::from_string(input, RunningMode::Exit, &exclude, &include, false, false);
+      ProcessManager::from_string(input, RunningMode::Exit, &exclude, &include, false, false, log_store);
 
     match manager {
       Ok(_) => panic!("expected no-processes error"),

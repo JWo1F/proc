@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>procfile</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f172a'/%3E%3Crect x='5' y='7' width='16' height='3.5' rx='1.75' fill='%23f472b6'/%3E%3Crect x='5' y='14.25' width='22' height='3.5' rx='1.75' fill='%2334d399'/%3E%3Crect x='5' y='21.5' width='12' height='3.5' rx='1.75' fill='%2360a5fa'/%3E%3C/svg%3E"/>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .log-line { min-height: 1.5rem; }
+    .log-line:hover { background: var(--hover-bg); }
+    :root { --hover-bg: rgba(0,0,0,0.03); }
+    .dark { --hover-bg: rgba(255,255,255,0.04); }
+    #log-container::-webkit-scrollbar { width: 8px; }
+    #log-container::-webkit-scrollbar-track { background: transparent; }
+    #log-container::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+    .dark #log-container::-webkit-scrollbar-thumb { background: #555; }
+    .fade-in { animation: fadeIn 0.15s ease-in; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .search-highlight { background: #fbbf24; color: #000; border-radius: 2px; padding: 0 1px; }
+    .dark .search-highlight { background: #d97706; color: #fff; }
+    .ansi-link { color: #3b82f6; text-decoration: underline; text-underline-offset: 2px; }
+    .ansi-link:hover { color: #2563eb; }
+    .dark .ansi-link { color: #60a5fa; }
+    .dark .ansi-link:hover { color: #93bbfd; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100 h-screen flex flex-col overflow-hidden transition-colors duration-200">
+
+  <!-- Header -->
+  <header class="flex-none border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-4 py-3">
+    <div class="flex items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <svg class="w-7 h-7 flex-none" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+          <rect width="32" height="32" rx="8" fill="#0f172a"/>
+          <rect x="5" y="7" width="16" height="3.5" rx="1.75" fill="#f472b6"/>
+          <rect x="5" y="14.25" width="22" height="3.5" rx="1.75" fill="#34d399"/>
+          <rect x="5" y="21.5" width="12" height="3.5" rx="1.75" fill="#60a5fa"/>
+        </svg>
+        <h1 id="app-title" class="text-lg font-semibold tracking-tight">procfile</h1>
+        <div id="status-badge" class="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span>connected</span>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <!-- Search -->
+        <div class="flex items-stretch rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 focus-within:ring-2 focus-within:ring-blue-500 dark:focus-within:ring-blue-400 focus-within:border-transparent" id="search-bar">
+          <div class="relative flex-1">
+            <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+            <input
+              id="search-input"
+              type="text"
+              placeholder="Search logs..."
+              class="mono w-64 h-full pl-8 pr-8 py-1.5 text-sm bg-transparent border-none focus:outline-none placeholder-gray-400 dark:placeholder-gray-500"
+            />
+            <button
+              id="search-clear"
+              class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hidden"
+              title="Clear search"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+          <div class="flex items-center border-l border-gray-300 dark:border-gray-700">
+            <button
+              id="search-case-btn"
+              class="px-2 h-full text-xs font-bold text-gray-400 dark:text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors leading-none"
+              title="Match case"
+            >Aa</button>
+            <button
+              id="search-word-btn"
+              class="px-2 h-full text-xs font-bold text-gray-400 dark:text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors leading-none border-l border-gray-300 dark:border-gray-700"
+              title="Match whole word"
+            >W</button>
+            <button
+              id="search-regex-btn"
+              class="px-2 h-full text-xs font-bold text-gray-400 dark:text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors leading-none border-l border-gray-300 dark:border-gray-700"
+              title="Use regular expression"
+            >.*</button>
+          </div>
+        </div>
+        <!-- Regex error -->
+        <span id="search-error" class="text-xs text-red-500 dark:text-red-400 hidden max-w-[12rem] truncate" title=""></span>
+
+        <!-- Filter count -->
+        <span id="filter-count" class="text-xs text-gray-500 dark:text-gray-400 hidden min-w-[4rem]"></span>
+
+        <!-- Process filter -->
+        <div class="relative" id="process-filter-container">
+          <button
+            id="process-filter-btn"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          >
+            <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+            </svg>
+            <span>Processes</span>
+          </button>
+          <div id="process-filter-dropdown" class="hidden absolute right-0 top-full mt-1 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 py-1">
+          </div>
+        </div>
+
+        <!-- Download -->
+        <div class="relative" id="download-container">
+          <button
+            id="download-btn"
+            class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            title="Download logs"
+          >
+            <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            <span>Save</span>
+          </button>
+          <div id="download-dropdown" class="hidden absolute right-0 top-full mt-1 w-56 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50 py-1">
+            <button id="download-all" class="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+              Download all logs
+            </button>
+            <button id="download-filtered" class="w-full text-left px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors hidden">
+              Download filtered logs
+            </button>
+          </div>
+        </div>
+
+        <!-- Theme toggle -->
+        <button
+          id="theme-toggle"
+          class="p-1.5 rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+          title="Toggle theme"
+        >
+          <svg id="theme-icon-light" class="w-4 h-4 text-gray-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+          </svg>
+          <svg id="theme-icon-dark" class="w-4 h-4 text-gray-500 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+          </svg>
+        </button>
+
+        <!-- Auto-scroll toggle -->
+        <button
+          id="autoscroll-toggle"
+          class="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-blue-300 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors"
+          title="Toggle auto-scroll"
+        >
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+          </svg>
+          <span class="text-xs font-medium">Auto</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Log container -->
+  <div id="log-container" class="flex-1 overflow-y-auto bg-white dark:bg-gray-950 px-4 py-2">
+    <div id="log-list" class="space-y-0"></div>
+    <div id="empty-state" class="flex flex-col items-center justify-center h-full text-gray-400 dark:text-gray-600">
+      <svg class="w-12 h-12 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <p class="text-sm font-medium">Waiting for logs...</p>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <footer class="flex-none border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-4 py-1.5">
+    <div class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+      <span id="log-count">0 lines</span>
+      <span class="mono" id="app-addr"></span>
+    </div>
+  </footer>
+
+  <script>
+    const logList = document.getElementById('log-list');
+    const logContainer = document.getElementById('log-container');
+    const searchInput = document.getElementById('search-input');
+    const searchClear = document.getElementById('search-clear');
+    const filterCount = document.getElementById('filter-count');
+    const logCountEl = document.getElementById('log-count');
+    const emptyState = document.getElementById('empty-state');
+    const statusBadge = document.getElementById('status-badge');
+    const themeToggle = document.getElementById('theme-toggle');
+    const themeIconLight = document.getElementById('theme-icon-light');
+    const themeIconDark = document.getElementById('theme-icon-dark');
+    const autoscrollToggle = document.getElementById('autoscroll-toggle');
+    const processFilterBtn = document.getElementById('process-filter-btn');
+    const processFilterDropdown = document.getElementById('process-filter-dropdown');
+    const downloadBtn = document.getElementById('download-btn');
+    const downloadDropdown = document.getElementById('download-dropdown');
+    const downloadAll = document.getElementById('download-all');
+    const downloadFiltered = document.getElementById('download-filtered');
+
+    const searchCaseBtn = document.getElementById('search-case-btn');
+    const searchWordBtn = document.getElementById('search-word-btn');
+    const searchRegexBtn = document.getElementById('search-regex-btn');
+    const searchError = document.getElementById('search-error');
+
+    let allLogs = [];
+    let autoScroll = true;
+    let searchQuery = '';
+    let searchCaseSensitive = false;
+    let searchWholeWord = false;
+    let searchRegex = false;
+    let compiledRegex = null;
+    let activeProcesses = new Set();
+    let knownProcesses = new Map(); // name -> color
+    let hiddenProcesses = new Set();
+    let eventSource = null;
+
+    // Theme
+    function getTheme() {
+      return localStorage.getItem('procfile-theme') || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    }
+
+    function applyTheme(theme) {
+      document.documentElement.classList.toggle('dark', theme === 'dark');
+      themeIconLight.classList.toggle('hidden', theme !== 'dark');
+      themeIconDark.classList.toggle('hidden', theme === 'dark');
+      localStorage.setItem('procfile-theme', theme);
+    }
+
+    applyTheme(getTheme());
+
+    themeToggle.addEventListener('click', () => {
+      applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
+    });
+
+    // Auto-scroll
+    function updateAutoScrollBtn() {
+      if (autoScroll) {
+        autoscrollToggle.className = 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-blue-300 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors';
+      } else {
+        autoscrollToggle.className = 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors';
+      }
+    }
+
+    autoscrollToggle.addEventListener('click', () => {
+      autoScroll = !autoScroll;
+      updateAutoScrollBtn();
+      if (autoScroll) scrollToBottom();
+    });
+
+    let scrollDebounce = null;
+    let programmaticScroll = false;
+    logContainer.addEventListener('scroll', () => {
+      if (programmaticScroll) return;
+      const { scrollTop, scrollHeight, clientHeight } = logContainer;
+      const distFromBottom = scrollHeight - scrollTop - clientHeight;
+      if (distFromBottom > 40 && autoScroll) {
+        autoScroll = false;
+        updateAutoScrollBtn();
+      }
+      // Re-enable auto-scroll when user reaches the very bottom, debounced
+      if (distFromBottom <= 1 && !autoScroll) {
+        clearTimeout(scrollDebounce);
+        scrollDebounce = setTimeout(() => {
+          if (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 1) {
+            autoScroll = true;
+            updateAutoScrollBtn();
+          }
+        }, 150);
+      }
+    });
+
+    function scrollToBottom() {
+      programmaticScroll = true;
+      logContainer.scrollTop = logContainer.scrollHeight;
+      // Reset flag after browser processes the scroll event
+      requestAnimationFrame(() => { programmaticScroll = false; });
+    }
+
+    // Build a regex from the current search settings, returns null if no query or invalid
+    function buildSearchRegex() {
+      if (!searchQuery) { compiledRegex = null; return; }
+      try {
+        const flags = searchCaseSensitive ? 'g' : 'gi';
+        let pattern;
+        if (searchRegex) {
+          pattern = searchQuery;
+        } else {
+          pattern = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+        if (searchWholeWord) {
+          pattern = `\\b${pattern}\\b`;
+        }
+        compiledRegex = new RegExp(pattern, flags);
+        searchError.classList.add('hidden');
+        searchError.title = '';
+        searchBar.classList.remove('!border-red-400', 'dark:!border-red-500');
+      } catch (e) {
+        compiledRegex = null;
+        searchError.textContent = e.message.replace('Invalid regular expression: ', '');
+        searchError.title = e.message;
+        searchError.classList.remove('hidden');
+        searchBar.classList.add('!border-red-400', 'dark:!border-red-500');
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    const URL_RE = /(?<![a-zA-Z0-9])(https?:\/\/[^\s<>"'`]+)/g;
+
+    // Auto-link bare URLs in already-escaped HTML, avoiding double-linking inside <a> tags
+    function linkifyHtml(html) {
+      // Split on existing <a ...>...</a> to avoid linkifying inside them
+      return html.replace(/<a\s[^>]*>[\s\S]*?<\/a>/g, '\x00$&\x00')
+        .split('\x00')
+        .map(part => {
+          if (part.startsWith('<a ')) return part;
+          return part.replace(URL_RE, (url) => {
+            // Trim trailing punctuation not part of URLs
+            let trimmed = url.replace(/[.,;:!?]+$/, '');
+            let tail = url.slice(trimmed.length);
+            return '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer" class="ansi-link">' + trimmed + '</a>' + tail;
+          });
+        })
+        .join('');
+    }
+
+    // Apply search highlights to an escaped HTML string, skipping inside tags
+    function applyHighlights(html) {
+      if (!compiledRegex) return html;
+      // Split into tags and text segments, only highlight in text
+      return html.replace(/(<[^>]+>)|([^<]+)/g, (m, tag, text) => {
+        if (tag) return tag;
+        compiledRegex.lastIndex = 0;
+        return text.replace(compiledRegex, '<span class="search-highlight">$&</span>');
+      });
+    }
+
+    // Build display HTML: linkify first, then highlight search matches in text only
+    function highlightText(text) {
+      const linked = linkifyHtml(escapeHtml(text));
+      return applyHighlights(linked);
+    }
+
+    const searchBar = document.getElementById('search-bar');
+
+    // Toggle button active state
+    const TOGGLE_ACTIVE = 'px-2 h-full text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors leading-none';
+    const TOGGLE_INACTIVE = 'px-2 h-full text-xs font-bold text-gray-400 dark:text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors leading-none';
+
+    function updateToggleBtn(btn, active, extraClass) {
+      btn.className = (active ? TOGGLE_ACTIVE : TOGGLE_INACTIVE) + (extraClass || '');
+    }
+
+    function updateSearchToggles() {
+      updateToggleBtn(searchCaseBtn, searchCaseSensitive);
+      updateToggleBtn(searchWordBtn, searchWholeWord, ' border-l border-gray-300 dark:border-gray-700');
+      updateToggleBtn(searchRegexBtn, searchRegex, ' border-l border-gray-300 dark:border-gray-700');
+    }
+
+    searchCaseBtn.addEventListener('click', () => {
+      searchCaseSensitive = !searchCaseSensitive;
+      updateSearchToggles();
+      applySearch();
+    });
+
+    searchWordBtn.addEventListener('click', () => {
+      searchWholeWord = !searchWholeWord;
+      updateSearchToggles();
+      applySearch();
+    });
+
+    searchRegexBtn.addEventListener('click', () => {
+      searchRegex = !searchRegex;
+      updateSearchToggles();
+      applySearch();
+    });
+
+    function applySearch() {
+      searchQuery = searchInput.value.trim();
+      searchClear.classList.toggle('hidden', !searchQuery);
+      buildSearchRegex();
+      renderAllLogs();
+    }
+
+    // Create a DOM element for a log entry
+    function createLogElement(entry, animate) {
+      const div = document.createElement('div');
+      div.className = 'log-line flex items-start gap-3 px-2 py-0.5 rounded mono text-[13px] leading-relaxed' + (animate ? ' fade-in' : '');
+      div.dataset.index = entry.index;
+      div.dataset.process = entry.process;
+
+      const idx = document.createElement('span');
+      idx.className = 'flex-none w-12 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed';
+      idx.textContent = '0x' + entry.index.toString(16).toUpperCase();
+
+      const ts = document.createElement('span');
+      ts.className = 'flex-none w-16 text-gray-400 dark:text-gray-500 text-xs leading-relaxed';
+      ts.textContent = entry.timestamp;
+
+      const proc = document.createElement('span');
+      proc.className = 'flex-none w-20 truncate text-xs font-medium leading-relaxed';
+      proc.style.color = entry.color;
+      proc.textContent = entry.process;
+
+      const content = document.createElement('span');
+      content.className = 'flex-1 min-w-0 break-all leading-relaxed whitespace-pre-wrap';
+      if (entry.system) {
+        content.classList.add('font-medium');
+        content.style.color = entry.color;
+      }
+
+      if (searchQuery && compiledRegex) {
+        content.innerHTML = highlightText(entry.line);
+      } else {
+        content.innerHTML = entry.html;
+      }
+
+      div.appendChild(idx);
+      div.appendChild(ts);
+      div.appendChild(proc);
+      div.appendChild(content);
+
+      return div;
+    }
+
+    function matchesFilter(entry) {
+      if (hiddenProcesses.has(entry.process)) return false;
+      if (!searchQuery) return true;
+      if (!compiledRegex) return true; // invalid regex shows all
+      compiledRegex.lastIndex = 0;
+      if (compiledRegex.test(entry.line)) return true;
+      compiledRegex.lastIndex = 0;
+      if (compiledRegex.test(entry.process)) return true;
+      return false;
+    }
+
+    function renderAllLogs() {
+      logList.innerHTML = '';
+      const fragment = document.createDocumentFragment();
+      let visibleCount = 0;
+
+      for (const entry of allLogs) {
+        if (!matchesFilter(entry)) continue;
+        fragment.appendChild(createLogElement(entry, false));
+        visibleCount++;
+      }
+
+      logList.appendChild(fragment);
+      emptyState.classList.toggle('hidden', allLogs.length > 0);
+      updateCounts(visibleCount);
+      if (autoScroll) requestAnimationFrame(scrollToBottom);
+    }
+
+    function updateCounts(visibleOverride) {
+      const total = allLogs.length;
+      const visible = visibleOverride !== undefined ? visibleOverride : logList.children.length;
+      logCountEl.textContent = `${total} lines`;
+
+      const hasFilter = searchQuery || hiddenProcesses.size > 0;
+      if (hasFilter && visible !== total) {
+        filterCount.textContent = `${visible} / ${total}`;
+        filterCount.classList.remove('hidden');
+        downloadFiltered.classList.remove('hidden');
+        downloadFiltered.textContent = `Download filtered (${visible})`;
+      } else {
+        filterCount.classList.add('hidden');
+        downloadFiltered.classList.add('hidden');
+      }
+    }
+
+    // Process filter
+    function registerProcess(name, color) {
+      if (knownProcesses.has(name)) return;
+      knownProcesses.set(name, color);
+      rebuildProcessFilter();
+    }
+
+    function rebuildProcessFilter() {
+      processFilterDropdown.innerHTML = '';
+      for (const [name, color] of knownProcesses) {
+        const btn = document.createElement('button');
+        btn.className = 'w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors';
+
+        const dot = document.createElement('span');
+        dot.className = 'w-2.5 h-2.5 rounded-full flex-none';
+        dot.style.backgroundColor = color;
+
+        const label = document.createElement('span');
+        label.className = 'flex-1 truncate';
+        label.textContent = name;
+
+        const check = document.createElement('span');
+        check.className = 'flex-none text-blue-500';
+        check.innerHTML = hiddenProcesses.has(name) ? '' : '&#10003;';
+
+        btn.appendChild(dot);
+        btn.appendChild(label);
+        btn.appendChild(check);
+
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (hiddenProcesses.has(name)) {
+            hiddenProcesses.delete(name);
+          } else {
+            hiddenProcesses.add(name);
+          }
+          rebuildProcessFilter();
+          renderAllLogs();
+        });
+
+        processFilterDropdown.appendChild(btn);
+      }
+    }
+
+    // Dropdown toggles
+    function setupDropdown(btn, dropdown) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isVisible = !dropdown.classList.contains('hidden');
+        closeAllDropdowns();
+        if (!isVisible) dropdown.classList.remove('hidden');
+      });
+    }
+
+    function closeAllDropdowns() {
+      processFilterDropdown.classList.add('hidden');
+      downloadDropdown.classList.add('hidden');
+    }
+
+    document.addEventListener('click', closeAllDropdowns);
+
+    setupDropdown(processFilterBtn, processFilterDropdown);
+    setupDropdown(downloadBtn, downloadDropdown);
+
+    // Search
+    let searchTimeout = null;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimeout);
+      searchTimeout = setTimeout(applySearch, 150);
+    });
+
+    searchClear.addEventListener('click', () => {
+      searchInput.value = '';
+      searchQuery = '';
+      compiledRegex = null;
+      searchClear.classList.add('hidden');
+      searchError.classList.add('hidden');
+      searchInput.classList.remove('!border-red-400', 'dark:!border-red-500');
+      renderAllLogs();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        searchInput.focus();
+        searchInput.select();
+      }
+      if (e.key === 'Escape' && document.activeElement === searchInput) {
+        searchInput.blur();
+      }
+    });
+
+    // Downloads
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function logsToText(entries) {
+      return entries.map(e => `${e.timestamp} [${e.process}] ${e.line}`).join('\n');
+    }
+
+    function dateSuffix() {
+      const d = new Date();
+      return d.getFullYear().toString()
+        + String(d.getMonth() + 1).padStart(2, '0')
+        + String(d.getDate()).padStart(2, '0')
+        + '-'
+        + String(d.getHours()).padStart(2, '0')
+        + String(d.getMinutes()).padStart(2, '0')
+        + String(d.getSeconds()).padStart(2, '0');
+    }
+
+    downloadAll.addEventListener('click', () => {
+      closeAllDropdowns();
+      downloadText(`${projectName}-logs-${dateSuffix()}.txt`, logsToText(allLogs));
+    });
+
+    downloadFiltered.addEventListener('click', () => {
+      closeAllDropdowns();
+      const filtered = allLogs.filter(matchesFilter);
+      downloadText(`${projectName}-logs-filtered-${dateSuffix()}.txt`, logsToText(filtered));
+    });
+
+    // SSE Connection
+    function setStatus(connected) {
+      if (connected) {
+        statusBadge.className = 'flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400';
+        statusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span><span>connected</span>';
+      } else {
+        statusBadge.className = 'flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400';
+        statusBadge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span>disconnected</span>';
+      }
+    }
+
+    // Debounced rendering: batch SSE events and flush on idle
+    const RENDER_DEBOUNCE_MS = 50;
+    let pendingEntries = [];
+    let renderTimer = null;
+
+    function parseLogEvent(e) {
+      const d = JSON.parse(e.data);
+      return {
+        index: parseInt(e.lastEventId, 10),
+        process: d.process,
+        color: d.color,
+        timestamp: d.ts,
+        system: d.sys,
+        line: d.line,
+        html: d.html,
+      };
+    }
+
+    function enqueueEntry(entry) {
+      if (entry.index < allLogs.length) return; // duplicate
+      allLogs.push(entry);
+      registerProcess(entry.process, entry.color);
+      pendingEntries.push(entry);
+      scheduleFlush();
+    }
+
+    function scheduleFlush() {
+      if (renderTimer !== null) return;
+      renderTimer = setTimeout(flushPending, RENDER_DEBOUNCE_MS);
+    }
+
+    function flushPending() {
+      renderTimer = null;
+      if (pendingEntries.length === 0) return;
+
+      const batch = pendingEntries;
+      pendingEntries = [];
+
+      // If there's an active filter, some entries may not match — check if a full re-render is cheaper
+      const hasFilter = searchQuery || hiddenProcesses.size > 0;
+
+      if (emptyState && allLogs.length > 0) {
+        emptyState.classList.add('hidden');
+      }
+
+      const animate = batch.length <= 5;
+
+      if (!hasFilter) {
+        // Fast path: just append all new entries
+        const fragment = document.createDocumentFragment();
+        for (const entry of batch) {
+          fragment.appendChild(createLogElement(entry, animate));
+        }
+        logList.appendChild(fragment);
+        updateCounts();
+      } else {
+        // With filters: append only matching entries
+        const fragment = document.createDocumentFragment();
+        let added = 0;
+        for (const entry of batch) {
+          if (matchesFilter(entry)) {
+            fragment.appendChild(createLogElement(entry, animate));
+            added++;
+          }
+        }
+        if (added > 0) logList.appendChild(fragment);
+        updateCounts();
+      }
+
+      if (autoScroll) scrollToBottom();
+    }
+
+    function connectSSE() {
+      if (eventSource) eventSource.close();
+      allLogs = [];
+      pendingEntries = [];
+      logList.innerHTML = '';
+      eventSource = new EventSource('/api/sse');
+
+      eventSource.addEventListener('init', (e) => {
+        try {
+          const info = JSON.parse(e.data);
+          projectName = info.name || 'procfile';
+          document.title = `Procfile: ${projectName}`;
+          document.getElementById('app-title').textContent = projectName;
+          document.getElementById('app-addr').textContent = location.host;
+        } catch (_) {}
+      });
+
+      eventSource.addEventListener('log', (e) => {
+        try {
+          enqueueEntry(parseLogEvent(e));
+        } catch (err) {
+          console.error('Failed to parse SSE event:', err);
+        }
+      });
+
+      eventSource.addEventListener('open', () => setStatus(true));
+      eventSource.addEventListener('error', () => {
+        setStatus(false);
+        eventSource.close();
+      });
+    }
+
+    let projectName = 'procfile';
+
+    // Initial load
+    function init() {
+      connectSSE();
+    }
+
+    init();
+  </script>
+</body>
+</html>

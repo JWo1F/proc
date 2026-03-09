@@ -33,3 +33,19 @@ pub fn color_for_index(index: usize) -> Color {
   let (r, g, b) = hsl_to_rgb(hue, COLOR_SATURATION, COLOR_LIGHTNESS);
   Color::TrueColor { r, g, b }
 }
+
+/// Convert a `colored::Color` to a CSS-compatible color string.
+pub fn color_to_css(color: &Color) -> String {
+  match color {
+    Color::TrueColor { r, g, b } => format!("rgb({},{},{})", r, g, b),
+    Color::Black => "#000".to_string(),
+    Color::Red => "#cd3131".to_string(),
+    Color::Green => "#0dbc79".to_string(),
+    Color::Yellow => "#e5e510".to_string(),
+    Color::Blue => "#2472c8".to_string(),
+    Color::Magenta => "#bc3fbc".to_string(),
+    Color::Cyan => "#11a8cd".to_string(),
+    Color::White => "#e5e5e5".to_string(),
+    _ => "inherit".to_string(),
+  }
+}
