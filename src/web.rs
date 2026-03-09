@@ -1,16 +1,21 @@
 use crate::ansi;
 use crate::log_store::LogStore;
 use axum::extract::State;
+use axum::http::{header, StatusCode, Uri};
 use axum::response::sse::{Event, Sse};
-use axum::response::Html;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
+use rust_embed::Embed;
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 
-const WEB_HTML: &str = include_str!("web.html");
+#[derive(Embed)]
+#[folder = "frontend/dist"]
+struct FrontendAssets;
+
 const SSE_RETRY_MS: u64 = 2000;
 /// Safe port range for deterministic hashing.
 const PORT_RANGE_START: u16 = 2592;
@@ -75,8 +80,27 @@ fn dir_name() -> String {
     .unwrap_or_else(|| "procfile".to_string())
 }
 
-async fn index_handler() -> Html<&'static str> {
-  Html(WEB_HTML)
+async fn static_handler(uri: Uri) -> Response {
+  let path = uri.path().trim_start_matches('/');
+
+  // Serve index.html for root or any path without an extension (SPA fallback)
+  let path = if path.is_empty() { "index.html" } else { path };
+
+  match FrontendAssets::get(path) {
+    Some(content) => {
+      let mime = mime_guess::from_path(path).first_or_octet_stream();
+      ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
+    }
+    None => {
+      // SPA fallback: serve index.html for unknown paths
+      match FrontendAssets::get("index.html") {
+        Some(content) => {
+          ([(header::CONTENT_TYPE, "text/html")], content.data).into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+      }
+    }
+  }
 }
 
 /// SSE handler: sends an `init` event first, then replays history (respecting
@@ -157,8 +181,8 @@ pub fn port_for_cwd() -> u16 {
 /// Start the web server, trying `port` first and falling back to consecutive ports.
 pub async fn start(store: Arc<LogStore>, port: u16) {
   let app = Router::new()
-    .route("/", get(index_handler))
     .route("/api/sse", get(sse_handler))
+    .fallback(static_handler)
     .with_state(store);
 
   let mut current = port;
