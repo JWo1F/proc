@@ -54,7 +54,7 @@ function createLogElement(entry) {
   lvl.textContent = LEVEL_LETTERS[entry.level] || "-";
 
   const content = document.createElement("span");
-  content.className = "flex-1 min-w-0 leading-relaxed whitespace-pre overflow-hidden text-ellipsis";
+  content.className = "flex-1 min-w-0 leading-relaxed whitespace-pre";
   if (entry.system) {
     content.classList.add("font-medium");
     content.style.color = entry.color;
@@ -64,7 +64,7 @@ function createLogElement(entry) {
   const expanded = expandedLines.has(entry.index);
   if (expanded) {
     div.classList.add("expanded");
-    content.classList.remove("overflow-hidden", "text-ellipsis", "whitespace-pre");
+    content.classList.remove("whitespace-pre");
     content.classList.add("whitespace-pre-wrap", "break-all");
   }
 
@@ -186,7 +186,7 @@ function render() {
     if (!entry) continue;
     const el = createLogElement(entry);
     el.setAttribute("data-index", item.index);
-    el.style.cssText = `position:absolute;top:0;left:0;width:100%;transform:translateY(${item.start}px)`;
+    el.style.cssText = `position:absolute;top:0;left:0;min-width:100%;transform:translateY(${item.start}px)`;
     frag.appendChild(el);
     if (expandedLines.has(entry.index)) hasExpanded = true;
   }
@@ -252,7 +252,7 @@ export function clearBlocks() {
 
 export function initVirtualScroll() {
   contentEl = document.createElement("div");
-  contentEl.style.cssText = "position:absolute;top:0;left:0;width:100%";
+  contentEl.style.cssText = "position:absolute;top:0;left:0;min-width:100%";
   logViewport.appendChild(contentEl);
 
   baseOpts = {
