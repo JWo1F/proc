@@ -1,24 +1,20 @@
-use crate::ansi;
-use crate::color::{color_for_index, color_to_css};
-use crate::log_store::LogStore;
-use crate::process::Process;
-use crate::procfile;
+use super::ansi;
+use super::color::color_for_index;
+use super::process::Process;
+use super::procfile;
+use super::LogEvent;
 use clap::ValueEnum;
-use colored::Colorize;
 use nix::sys::signal::Signal;
 use pty_process::Pty;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{BufReader, Lines};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::sleep;
 
-const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
-const COMPACT_INDICATOR: &str = "▌";
 /// How long to wait after SIGINT before sending SIGKILL.
 const SIGKILL_GRACE_SECS: u64 = 5;
 
@@ -63,15 +59,11 @@ enum Event {
 pub struct ProcessManager {
   /// Current running mode (may switch to Relax during shutdown).
   mode: RunningMode,
-  /// Longest process name length, used to align log prefixes.
+  /// Longest process name length, used by stdout to align log prefixes.
   name_width: usize,
   /// Active processes keyed by their index from the Procfile.
   processes: HashMap<usize, Process>,
-  /// Whether to prefix each output line with a timestamp.
-  timestamps: bool,
-  /// Compact mode: show a colored block instead of the process name.
-  compact: bool,
-  /// Sender half of the event channel — cloned into background tasks.
+  /// Sender half of the internal event channel — cloned into background tasks.
   tx: mpsc::UnboundedSender<Event>,
   /// Receiver half — consumed exclusively by the main event loop.
   rx: mpsc::UnboundedReceiver<Event>,
@@ -79,8 +71,8 @@ pub struct ProcessManager {
   failed: bool,
   /// Set once graceful shutdown has been initiated (SIGINT sent).
   shutting_down: bool,
-  /// Shared log store for web UI.
-  log_store: Arc<LogStore>,
+  /// Broadcast channel for log consumers (stdout, web).
+  log_tx: broadcast::Sender<LogEvent>,
 }
 
 impl ProcessManager {
@@ -90,9 +82,7 @@ impl ProcessManager {
     mode: RunningMode,
     exclude: &[String],
     include: &[String],
-    timestamps: bool,
-    compact: bool,
-    log_store: Arc<LogStore>,
+    log_tx: broadcast::Sender<LogEvent>,
   ) -> Result<Self, String> {
     let parsed = procfile::parse(input, exclude, include)?;
 
@@ -113,14 +103,17 @@ impl ProcessManager {
       processes,
       name_width,
       mode,
-      timestamps,
-      compact,
       tx,
       rx,
       failed: false,
       shutting_down: false,
-      log_store,
+      log_tx,
     })
+  }
+
+  /// Longest process name length (for stdout alignment).
+  pub fn name_width(&self) -> usize {
+    self.name_width
   }
 
   /// Read lines from a PTY and forward them as `Event::Line` / `Event::ProcessEnded`.
@@ -187,6 +180,21 @@ impl ProcessManager {
     ids
   }
 
+  /// Send a log event to all consumers (stdout, web).
+  fn emit(&self, proc: &Process, line: &str, system: bool) {
+    let _ = self.log_tx.send(LogEvent {
+      process: proc.name.clone(),
+      color: proc.color,
+      line: line.to_string(),
+      system,
+    });
+  }
+
+  /// Send a system message like "[web] Stopping..." to all consumers.
+  fn emit_system(&self, proc: &Process, message: &str) {
+    self.emit(proc, &format!("[{}] {}", proc.name, message), true);
+  }
+
   /// Spawn a single process and attach a PTY reader.
   fn start_one(&mut self, id: usize) -> Result<(), String> {
     let reader = {
@@ -200,7 +208,9 @@ impl ProcessManager {
     Self::spawn_reader(id, reader, self.tx.clone());
 
     if let Some(proc) = self.processes.get(&id) {
-      self.log_spawn(proc);
+      if let Some(pid) = proc.pid() {
+        self.emit_system(proc, &format!("Spawned, pid: {}", pid));
+      }
     }
 
     Ok(())
@@ -213,7 +223,7 @@ impl ProcessManager {
         self.failed = true;
 
         if let Some(proc) = self.processes.get(&id) {
-          self.print_system_line(proc, &err);
+          self.emit_system(proc, &err);
         } else {
           eprintln!("Error starting process {}: {}", id, err);
         }
@@ -267,7 +277,7 @@ impl ProcessManager {
     match self.mode {
       RunningMode::Restart => {
         if let Some(proc) = self.processes.get(&id) {
-          self.print_system_line(proc, &exit_message);
+          self.emit_system(proc, &exit_message);
         }
 
         // Process stays in the map (child=None) while waiting for the restart timer.
@@ -279,7 +289,7 @@ impl ProcessManager {
 
         if let Some(delay) = delay {
           if let Some(proc) = self.processes.get(&id) {
-            self.print_system_line(proc, &format!("Restarting in {}ms...", delay.as_millis()));
+            self.emit_system(proc, &format!("Restarting in {}ms...", delay.as_millis()));
           }
 
           Self::spawn_restart(id, delay, self.tx.clone());
@@ -291,7 +301,7 @@ impl ProcessManager {
         }
 
         if let Some(proc) = self.processes.get(&id) {
-          self.print_system_line(proc, &exit_message);
+          self.emit_system(proc, &exit_message);
         }
 
         self.processes.remove(&id);
@@ -310,7 +320,7 @@ impl ProcessManager {
         };
 
         if let Some(proc) = self.processes.get(&id) {
-          self.print_system_line(proc, message);
+          self.emit_system(proc, message);
         }
 
         self.processes.remove(&id);
@@ -329,7 +339,7 @@ impl ProcessManager {
       self.failed = true;
 
       if let Some(proc) = self.processes.get(&id) {
-        self.print_system_line(proc, &err);
+        self.emit_system(proc, &err);
       } else {
         eprintln!("Error restarting process {}: {}", id, err);
       }
@@ -347,7 +357,7 @@ impl ProcessManager {
 
       if process.is_running() {
         process.signal(signal);
-        self.print_system_line(process, message);
+        self.emit_system(process, message);
       }
     }
   }
@@ -369,10 +379,10 @@ impl ProcessManager {
   /// First Ctrl+C starts graceful shutdown; second one sends SIGKILL immediately.
   fn handle_ctrlc(&mut self) {
     if !self.shutting_down {
-      println!("\nCtrl+C received, stopping processes...");
+      eprintln!("\nCtrl+C received, stopping processes...");
       self.stop();
     } else {
-      println!("Ctrl+C received again, killing processes...");
+      eprintln!("Ctrl+C received again, killing processes...");
       self.signal_all(Signal::SIGKILL, "Killing...");
     }
   }
@@ -396,8 +406,7 @@ impl ProcessManager {
       match event {
         Event::Line(id, line) => {
           if let Some(proc) = self.processes.get(&id) {
-            println!("{}", self.compose_line(proc, &line));
-            self.store_log(proc, &line, false);
+            self.emit(proc, &line, false);
           }
         }
         Event::ProcessEnded(id) => self.handle_exit(id).await,
@@ -408,65 +417,6 @@ impl ProcessManager {
     }
 
     self.exit_code()
-  }
-
-  /// Print a "Spawned, pid: ..." message for a newly started process.
-  fn log_spawn(&self, proc: &Process) {
-    if let Some(pid) = proc.pid() {
-      self.print_system_line(proc, &format!("Spawned, pid: {}", pid));
-    }
-  }
-
-  /// Format a system message like "[web] Stopping..." with the process prefix.
-  fn compose_system_line(&self, proc: &Process, line: &str) -> String {
-    self.compose_line(proc, &format!("[{}] {}", proc.name, line))
-  }
-
-  /// Print and store a system message like "[web] Stopping...".
-  fn print_system_line(&self, proc: &Process, message: &str) {
-    println!("{}", self.compose_system_line(proc, message));
-    let decorated = format!("[{}] {}", proc.name, message);
-    self.store_log(proc, &decorated, true);
-  }
-
-  /// Push a log entry to the shared store for the web UI.
-  fn store_log(&self, proc: &Process, line: &str, system: bool) {
-    let timestamp = chrono::Local::now()
-      .format(TIMESTAMP_FORMAT)
-      .to_string();
-    let css_color = color_to_css(&proc.color);
-    self
-      .log_store
-      .push(&proc.name, &css_color, line, &timestamp, system);
-  }
-
-  /// Format an output line with the colored process name prefix (and optional timestamp).
-  fn compose_line(&self, proc: &Process, line: &str) -> String {
-    let mut parts = Vec::new();
-
-    if self.timestamps {
-      let now = chrono::Local::now();
-      parts.push(
-        now
-          .format(TIMESTAMP_FORMAT)
-          .to_string()
-          .color(proc.color)
-          .to_string(),
-      );
-    }
-
-    if self.compact {
-      parts.push(COMPACT_INDICATOR.color(proc.color).to_string());
-    } else {
-      let width = self.name_width;
-      parts.push(
-        format!("{:width$} |", proc.name)
-          .color(proc.color)
-          .to_string(),
-      );
-    }
-
-    format!("{} {}", parts.join(" "), line)
   }
 }
 
@@ -480,9 +430,8 @@ mod tests {
     let include = Vec::<String>::new();
     let input = "web: echo hi\n";
 
-    let log_store = Arc::new(LogStore::new());
-    let manager =
-      ProcessManager::from_string(input, RunningMode::Exit, &exclude, &include, false, false, log_store);
+    let (log_tx, _) = broadcast::channel(16);
+    let manager = ProcessManager::from_string(input, RunningMode::Exit, &exclude, &include, log_tx);
 
     match manager {
       Ok(_) => panic!("expected no-processes error"),

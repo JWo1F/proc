@@ -1,9 +1,9 @@
-import { state } from "../lib/state.js";
+import { ui } from "../main.js";
 import { autoscrollToggle, logContainer } from "../lib/dom.js";
 import { scrollToBottom, renderVisible } from "./virtual-scroll.js";
 
 function updateAutoScrollBtn() {
-  if (state.autoScroll) {
+  if (ui.autoScroll) {
     autoscrollToggle.className =
       "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-blue-300 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors";
   } else {
@@ -17,28 +17,27 @@ export function initAutoScroll() {
   let programmaticScroll = false;
   let scrollRafId = null;
 
-  // Expose programmatic scroll flag for scrollToBottom
   window.__setProgrammaticScroll = (v) => { programmaticScroll = v; };
 
   autoscrollToggle.addEventListener("click", () => {
-    state.autoScroll = !state.autoScroll;
+    ui.autoScroll = !ui.autoScroll;
     updateAutoScrollBtn();
-    if (state.autoScroll) scrollToBottom();
+    if (ui.autoScroll) scrollToBottom();
   });
 
   logContainer.addEventListener("scroll", () => {
     if (!programmaticScroll) {
       const { scrollTop, scrollHeight, clientHeight } = logContainer;
       const distFromBottom = scrollHeight - scrollTop - clientHeight;
-      if (distFromBottom > 40 && state.autoScroll) {
-        state.autoScroll = false;
+      if (distFromBottom > 40 && ui.autoScroll) {
+        ui.autoScroll = false;
         updateAutoScrollBtn();
       }
-      if (distFromBottom <= 1 && !state.autoScroll) {
+      if (distFromBottom <= 1 && !ui.autoScroll) {
         clearTimeout(scrollDebounce);
         scrollDebounce = setTimeout(() => {
           if (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 1) {
-            state.autoScroll = true;
+            ui.autoScroll = true;
             updateAutoScrollBtn();
           }
         }, 150);

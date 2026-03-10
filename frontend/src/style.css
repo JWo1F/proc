@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -86,3 +88,33 @@
 .dark .ansi-link:hover {
   color: #93bbfd;
 }
+
+.log-line.level-debug {
+  opacity: 0.6;
+}
+
+.log-line.level-warn {
+  background: rgba(234, 179, 8, 0.08);
+}
+
+.dark .log-line.level-warn {
+  background: rgba(234, 179, 8, 0.06);
+}
+
+.log-line.level-error,
+.log-line.level-fatal {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.dark .log-line.level-error,
+.dark .log-line.level-fatal {
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.level-badge { opacity: 0.7; }
+.level-badge-none { color: #9ca3af; }
+.level-badge-debug { color: #9ca3af; }
+.level-badge-info { color: #3b82f6; }
+.level-badge-warn { color: #eab308; }
+.level-badge-error { color: #ef4444; }
+.level-badge-fatal { color: #dc2626; }

@@ -1,7 +1,27 @@
-import { state } from "../lib/state.js";
+import { ui } from "../main.js";
 import { downloadAll, downloadFiltered } from "../lib/dom.js";
-import { matchesFilter } from "../lib/filters.js";
 import { closeAllDropdowns } from "./process-filter.js";
+
+let requestId = 0;
+const pending = new Map();
+
+function onWorkerResponse(e) {
+  const msg = e.data;
+  if (msg.type !== "allLogs" && msg.type !== "filteredLogs") return;
+  const cb = pending.get(msg.id);
+  if (cb) {
+    pending.delete(msg.id);
+    cb(msg.entries);
+  }
+}
+
+function requestLogs(type) {
+  return new Promise((resolve) => {
+    const id = ++requestId;
+    pending.set(id, resolve);
+    ui.worker.postMessage({ type, id });
+  });
+}
 
 function downloadText(filename, text) {
   const blob = new Blob([text], { type: "text/plain" });
@@ -31,17 +51,17 @@ function dateSuffix() {
 }
 
 export function initDownloads() {
-  downloadAll.addEventListener("click", () => {
+  ui.worker.addEventListener("message", onWorkerResponse);
+
+  downloadAll.addEventListener("click", async () => {
     closeAllDropdowns();
-    downloadText(`${state.projectName}-logs-${dateSuffix()}.txt`, logsToText(state.allLogs));
+    const entries = await requestLogs("getAll");
+    downloadText(`${ui.projectName}-logs-${dateSuffix()}.txt`, logsToText(entries));
   });
 
-  downloadFiltered.addEventListener("click", () => {
+  downloadFiltered.addEventListener("click", async () => {
     closeAllDropdowns();
-    const filtered = state.allLogs.filter(matchesFilter);
-    downloadText(
-      `${state.projectName}-logs-filtered-${dateSuffix()}.txt`,
-      logsToText(filtered),
-    );
+    const entries = await requestLogs("getFiltered");
+    downloadText(`${ui.projectName}-logs-filtered-${dateSuffix()}.txt`, logsToText(entries));
   });
 }

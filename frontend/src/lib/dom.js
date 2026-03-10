@@ -30,6 +30,10 @@ export const autoscrollToggle = $("autoscroll-toggle");
 export const processFilterBtn = $("process-filter-btn");
 export const processFilterDropdown = $("process-filter-dropdown");
 
+// Level filter
+export const levelFilterBtn = $("level-filter-btn");
+export const levelFilterDropdown = $("level-filter-dropdown");
+
 // Download
 export const downloadBtn = $("download-btn");
 export const downloadDropdown = $("download-dropdown");

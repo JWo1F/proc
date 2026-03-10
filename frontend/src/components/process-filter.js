@@ -1,10 +1,12 @@
-import { state } from "../lib/state.js";
-import { processFilterBtn, processFilterDropdown, downloadBtn, downloadDropdown } from "../lib/dom.js";
+import { ui, onWorkerMessage } from "../main.js";
+import { processFilterBtn, processFilterDropdown, downloadBtn, downloadDropdown, levelFilterDropdown } from "../lib/dom.js";
 import { renderAllLogs } from "./virtual-scroll.js";
+import { sendFilter } from "./search.js";
 
 function closeAllDropdowns() {
   processFilterDropdown.classList.add("hidden");
   downloadDropdown.classList.add("hidden");
+  levelFilterDropdown.classList.add("hidden");
 }
 
 function setupDropdown(btn, dropdown) {
@@ -18,7 +20,7 @@ function setupDropdown(btn, dropdown) {
 
 function rebuildProcessFilter() {
   processFilterDropdown.innerHTML = "";
-  for (const [name, color] of state.knownProcesses) {
+  for (const [name, color] of ui.processes) {
     const btn = document.createElement("button");
     btn.className =
       "w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors";
@@ -33,7 +35,7 @@ function rebuildProcessFilter() {
 
     const check = document.createElement("span");
     check.className = "flex-none text-blue-500";
-    check.innerHTML = state.hiddenProcesses.has(name) ? "" : "&#10003;";
+    check.innerHTML = ui.hiddenProcesses.has(name) ? "" : "&#10003;";
 
     btn.appendChild(dot);
     btn.appendChild(label);
@@ -41,11 +43,12 @@ function rebuildProcessFilter() {
 
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      if (state.hiddenProcesses.has(name)) {
-        state.hiddenProcesses.delete(name);
+      if (ui.hiddenProcesses.has(name)) {
+        ui.hiddenProcesses.delete(name);
       } else {
-        state.hiddenProcesses.add(name);
+        ui.hiddenProcesses.add(name);
       }
+      sendFilter();
       rebuildProcessFilter();
       renderAllLogs();
     });
@@ -54,17 +57,15 @@ function rebuildProcessFilter() {
   }
 }
 
-export function registerProcess(name, color) {
-  if (state.knownProcesses.has(name)) return;
-  state.knownProcesses.set(name, color);
-  rebuildProcessFilter();
-}
-
-// Also exported for dropdown close from downloads
-export { closeAllDropdowns };
+export { closeAllDropdowns, setupDropdown };
 
 export function initProcessFilter() {
   setupDropdown(processFilterBtn, processFilterDropdown);
   setupDropdown(downloadBtn, downloadDropdown);
   document.addEventListener("click", closeAllDropdowns);
+
+  // Rebuild filter dropdown when processes change
+  onWorkerMessage("update", () => {
+    rebuildProcessFilter();
+  });
 }

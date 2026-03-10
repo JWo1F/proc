@@ -1,4 +1,4 @@
-import { state } from "../lib/state.js";
+import { ui } from "../main.js";
 import { searchInput, searchClear, searchBar, searchCaseBtn, searchWordBtn, searchRegexBtn, searchError } from "../lib/dom.js";
 import { renderAllLogs } from "./virtual-scroll.js";
 
@@ -12,33 +12,22 @@ function updateToggleBtn(btn, active, extraClass) {
 }
 
 function updateSearchToggles() {
-  updateToggleBtn(searchCaseBtn, state.searchCaseSensitive);
-  updateToggleBtn(searchWordBtn, state.searchWholeWord, " border-l border-gray-300 dark:border-gray-700");
-  updateToggleBtn(searchRegexBtn, state.searchRegex, " border-l border-gray-300 dark:border-gray-700");
+  updateToggleBtn(searchCaseBtn, ui.searchCaseSensitive);
+  updateToggleBtn(searchWordBtn, ui.searchWholeWord, " border-l border-gray-300 dark:border-gray-700");
+  updateToggleBtn(searchRegexBtn, ui.searchRegex, " border-l border-gray-300 dark:border-gray-700");
 }
 
-function buildSearchRegex() {
-  if (!state.searchQuery) {
-    state.compiledRegex = null;
+function validateRegex() {
+  if (!ui.searchQuery || !ui.searchRegex) {
+    searchError.classList.add("hidden");
+    searchBar.classList.remove("!border-red-400", "dark:!border-red-500");
     return;
   }
   try {
-    const flags = state.searchCaseSensitive ? "g" : "gi";
-    let pattern;
-    if (state.searchRegex) {
-      pattern = state.searchQuery;
-    } else {
-      pattern = state.searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    }
-    if (state.searchWholeWord) {
-      pattern = `\\b${pattern}\\b`;
-    }
-    state.compiledRegex = new RegExp(pattern, flags);
+    new RegExp(ui.searchQuery);
     searchError.classList.add("hidden");
-    searchError.title = "";
     searchBar.classList.remove("!border-red-400", "dark:!border-red-500");
   } catch (e) {
-    state.compiledRegex = null;
     searchError.textContent = e.message.replace("Invalid regular expression: ", "");
     searchError.title = e.message;
     searchError.classList.remove("hidden");
@@ -46,12 +35,28 @@ function buildSearchRegex() {
   }
 }
 
+function sendFilter() {
+  ui.worker.postMessage({
+    type: "setFilter",
+    query: ui.searchQuery,
+    caseSensitive: ui.searchCaseSensitive,
+    wholeWord: ui.searchWholeWord,
+    regex: ui.searchRegex,
+    hiddenProcesses: Array.from(ui.hiddenProcesses),
+    hiddenLevels: Array.from(ui.hiddenLevels),
+  });
+}
+
 function applySearch() {
-  state.searchQuery = searchInput.value.trim();
-  searchClear.classList.toggle("hidden", !state.searchQuery);
-  buildSearchRegex();
+  ui.searchQuery = searchInput.value.trim();
+  searchClear.classList.toggle("hidden", !ui.searchQuery);
+  validateRegex();
+  sendFilter();
   renderAllLogs();
 }
+
+// Exported so process-filter can also trigger filter updates
+export { sendFilter };
 
 export function initSearch() {
   let searchTimeout = null;
@@ -63,28 +68,28 @@ export function initSearch() {
 
   searchClear.addEventListener("click", () => {
     searchInput.value = "";
-    state.searchQuery = "";
-    state.compiledRegex = null;
+    ui.searchQuery = "";
     searchClear.classList.add("hidden");
     searchError.classList.add("hidden");
     searchBar.classList.remove("!border-red-400", "dark:!border-red-500");
+    sendFilter();
     renderAllLogs();
   });
 
   searchCaseBtn.addEventListener("click", () => {
-    state.searchCaseSensitive = !state.searchCaseSensitive;
+    ui.searchCaseSensitive = !ui.searchCaseSensitive;
     updateSearchToggles();
     applySearch();
   });
 
   searchWordBtn.addEventListener("click", () => {
-    state.searchWholeWord = !state.searchWholeWord;
+    ui.searchWholeWord = !ui.searchWholeWord;
     updateSearchToggles();
     applySearch();
   });
 
   searchRegexBtn.addEventListener("click", () => {
-    state.searchRegex = !state.searchRegex;
+    ui.searchRegex = !ui.searchRegex;
     updateSearchToggles();
     applySearch();
   });
