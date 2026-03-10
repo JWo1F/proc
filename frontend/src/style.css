@@ -31,6 +31,7 @@
 
 #log-container::-webkit-scrollbar {
   width: 8px;
+  height: 8px;
 }
 
 #log-container::-webkit-scrollbar-track {
@@ -46,17 +47,8 @@
   background: #555;
 }
 
-.fade-in {
-  animation: fadeIn 0.15s ease-in;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
+#log-container::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .search-highlight {
