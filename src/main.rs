@@ -67,6 +67,10 @@ struct Args {
   #[arg(short = 's', long)]
   compact: bool,
 
+  /// Suppress log output to stdout (use with -w for web-only)
+  #[arg(short = 'q', long)]
+  silent: bool,
+
   /// Start web UI (optional port, default: derived from folder name)
   #[cfg(feature = "web")]
   #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "0")]
@@ -83,7 +87,11 @@ pub async fn main() -> ExitCode {
   let (log_tx, _) = broadcast::channel(16384);
 
   // Subscribe consumers before passing tx to the manager.
-  let stdout_rx = log_tx.subscribe();
+  let stdout_rx = if !args.silent {
+    Some(log_tx.subscribe())
+  } else {
+    None
+  };
 
   #[cfg(feature = "web")]
   let web_rx = if args.web.is_some() {
@@ -131,15 +139,17 @@ pub async fn main() -> ExitCode {
     .map(|m| m.name_width())
     .unwrap_or(name_width);
 
-  // Start stdout consumer
-  let stdout_handle = tokio::spawn(stdout::run(
-    stdout_rx,
-    stdout::StdoutConfig {
-      timestamps: args.timestamps,
-      compact: args.compact,
-      name_width: actual_name_width,
-    },
-  ));
+  // Start stdout consumer (unless silent)
+  let stdout_handle = stdout_rx.map(|rx| {
+    tokio::spawn(stdout::run(
+      rx,
+      stdout::StdoutConfig {
+        timestamps: args.timestamps,
+        compact: args.compact,
+        name_width: actual_name_width,
+      },
+    ))
+  });
 
   // Start web consumer (if enabled)
   #[cfg(feature = "web")]
@@ -164,7 +174,9 @@ pub async fn main() -> ExitCode {
     code
   };
 
-  let _ = stdout_handle.await;
+  if let Some(handle) = stdout_handle {
+    let _ = handle.await;
+  }
 
   exit_code.into()
 }

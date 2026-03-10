@@ -1,6 +1,6 @@
 [package]
 name = "procfile"
-version = "1.10.0"
+version = "1.10.1"
 edition = "2024"
 rust-version = "1.94"
 description = "A process manager that runs commands defined in a Procfile"
