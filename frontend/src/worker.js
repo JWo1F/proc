@@ -25,6 +25,7 @@ let compiledRegex = null;
 
 let eventSource = null;
 let updateTimer = null;
+let filterVersion = 0;
 
 // ── Entry processing ───────────────────────────────────────────────────
 
@@ -118,6 +119,7 @@ function sendUpdate() {
     total: allLogs.length,
     filtered: filteredIndices.length,
     processes: Array.from(knownProcesses.entries()),
+    filterVersion,
   });
 }
 
@@ -187,7 +189,7 @@ self.onmessage = (e) => {
       for (let i = msg.start; i < end; i++) {
         entries.push(applyHighlights(allLogs[filteredIndices[i]]));
       }
-      self.postMessage({ type: "batch", id: msg.id, entries });
+      self.postMessage({ type: "batch", id: msg.id, start: msg.start, entries });
       break;
     }
 
@@ -201,6 +203,7 @@ self.onmessage = (e) => {
         hiddenLevels: msg.hiddenLevels || [],
         activeTokens: (msg.activeTokens || []).map((t) => t.toLowerCase()),
       };
+      filterVersion++;
       rebuildFilter();
       sendUpdate();
       break;

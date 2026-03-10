@@ -1,23 +1,34 @@
-// Block-based virtual scrolling — requests batches from the worker,
-// renders only visible blocks.
+// Virtual scrolling powered by @tanstack/virtual-core.
+// Requests visible entries from the worker on demand.
 
+import { Virtualizer, elementScroll, observeElementOffset, observeElementRect } from "@tanstack/virtual-core";
 import { ui, onWorkerMessage } from "../main.js";
 import { logViewport, logContainer, emptyState, logCountEl, filterCount, downloadFiltered } from "../lib/dom.js";
+import { updateAutoScrollBtn } from "./auto-scroll.js";
 
 const LEVEL_LETTERS = { debug: "D", info: "I", warn: "W", error: "E", fatal: "F" };
-
 const ROW_HEIGHT = 24;
-const BLOCK_SIZE = 100;
-const OVERSCAN = 30;
+const OVERSCAN = 50;
 
-const renderedBlocks = new Map();   // blockIndex → DOM element
-const pendingBlocks = new Set();    // blocks we've requested but not received
+// ── Cache ─────────────────────────────────────────────────────────────
 
-export function clearBlocks() {
-  for (const el of renderedBlocks.values()) el.remove();
-  renderedBlocks.clear();
-  pendingBlocks.clear();
-}
+const entryCache = new Map();   // filteredIndex → entry
+const expandedLines = new Set(); // raw log indices of expanded lines
+let lastFilterVersion = -1;
+let pendingKey = null;
+
+// ── DOM ───────────────────────────────────────────────────────────────
+
+let contentEl = null;
+let virtualizer = null;
+let baseOpts = null;
+let rendering = false;
+let needsRerender = false;
+let renderScheduled = false;
+let measureAll = false; // set on expand/collapse to remeasure all visible elements
+let lastRenderKey = ""; // tracks what's in the DOM to skip unnecessary rebuilds
+
+// ── Log element factory ───────────────────────────────────────────────
 
 function createLogElement(entry) {
   const div = document.createElement("div");
@@ -50,17 +61,26 @@ function createLogElement(entry) {
   }
   content.innerHTML = entry.html;
 
-  // Click index to expand/collapse long lines
+  const expanded = expandedLines.has(entry.index);
+  if (expanded) {
+    div.classList.add("expanded");
+    content.classList.remove("overflow-hidden", "text-ellipsis", "whitespace-pre");
+    content.classList.add("whitespace-pre-wrap", "break-all");
+  }
+
   idx.addEventListener("click", (e) => {
     e.stopPropagation();
-    div.classList.toggle("expanded");
-    if (div.classList.contains("expanded")) {
-      content.classList.remove("overflow-hidden", "text-ellipsis", "whitespace-pre");
-      content.classList.add("whitespace-pre-wrap", "break-all");
+    if (expandedLines.has(entry.index)) {
+      expandedLines.delete(entry.index);
     } else {
-      content.classList.add("overflow-hidden", "text-ellipsis", "whitespace-pre");
-      content.classList.remove("whitespace-pre-wrap", "break-all");
+      expandedLines.add(entry.index);
     }
+    // Stop auto-scroll so the line stays visible during heavy input
+    ui.autoScroll = false;
+    updateAutoScrollBtn();
+    measureAll = true;
+    lastRenderKey = "";
+    render();
   });
 
   div.appendChild(idx);
@@ -72,14 +92,7 @@ function createLogElement(entry) {
   return div;
 }
 
-function createBlockFromEntries(entries, blockIdx) {
-  const el = document.createElement("div");
-  el.style.cssText = "position:absolute;left:0;right:0;top:" + (blockIdx * BLOCK_SIZE * ROW_HEIGHT) + "px";
-  for (const entry of entries) {
-    el.appendChild(createLogElement(entry));
-  }
-  return el;
-}
+// ── Counts ────────────────────────────────────────────────────────────
 
 function updateCounts() {
   logCountEl.textContent = `${ui.totalLogs} lines`;
@@ -95,110 +108,201 @@ function updateCounts() {
   }
 }
 
-export function renderVisible() {
-  const totalRows = ui.filteredLogs;
-  logViewport.style.height = totalRows * ROW_HEIGHT + "px";
-  emptyState.classList.toggle("hidden", ui.totalLogs > 0);
+// ── Render ─────────────────────────────────────────────────────────────
 
-  if (totalRows === 0) {
-    clearBlocks();
-    updateCounts();
+// Coalesce multiple render triggers into a single RAF.
+function scheduleRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    render();
+  });
+}
+
+function render() {
+  // Re-entrancy guard: measureElement → notify → onChange → render
+  // Defer until measurement pass completes, then re-render once.
+  if (rendering) {
+    needsRerender = true;
     return;
   }
 
-  const scrollTop = logContainer.scrollTop;
-  const viewportHeight = logContainer.clientHeight;
-
-  let startRow = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
-  let endRow = Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN;
-  startRow = Math.max(0, startRow);
-  endRow = Math.min(totalRows, endRow);
-
-  if (endRow <= 0) {
-    clearBlocks();
-    updateCounts();
+  if (!virtualizer || ui.filteredLogs === 0) {
+    if (contentEl) contentEl.innerHTML = "";
     return;
   }
 
-  const startBlock = Math.floor(startRow / BLOCK_SIZE);
-  const endBlock = Math.floor((endRow - 1) / BLOCK_SIZE);
+  virtualizer._willUpdate();
+  const items = virtualizer.getVirtualItems();
+  if (items.length === 0) {
+    contentEl.innerHTML = "";
+    return;
+  }
 
-  // Remove blocks and pending requests out of range
-  for (const [idx, el] of renderedBlocks) {
-    if (idx < startBlock || idx > endBlock) {
-      el.remove();
-      renderedBlocks.delete(idx);
+  // Determine missing entries and request from worker
+  let missStart = -1;
+  let missEnd = -1;
+  for (const item of items) {
+    if (!entryCache.has(item.index)) {
+      if (missStart === -1) missStart = item.index;
+      missEnd = item.index + 1;
     }
   }
-  for (const idx of pendingBlocks) {
-    if (idx < startBlock || idx > endBlock) {
-      pendingBlocks.delete(idx);
+
+  if (missStart !== -1) {
+    const key = `${missStart}:${missEnd}`;
+    if (key !== pendingKey) {
+      pendingKey = key;
+      ui.worker.postMessage({
+        type: "getBatch",
+        id: key,
+        start: missStart,
+        count: missEnd - missStart,
+      });
     }
   }
 
-  // Request blocks in range
-  for (let b = startBlock; b <= endBlock; b++) {
-    if (renderedBlocks.has(b) || pendingBlocks.has(b)) continue;
-    pendingBlocks.add(b);
-    ui.worker.postMessage({
-      type: "getBatch",
-      id: b,
-      start: b * BLOCK_SIZE,
-      count: BLOCK_SIZE,
-    });
+  // Build a render key to skip DOM rebuild when nothing visible has changed.
+  // Includes index, position, cache presence, and expand state.
+  let renderKey = "";
+  for (const item of items) {
+    const entry = entryCache.get(item.index);
+    const exp = entry && expandedLines.has(entry.index) ? 1 : 0;
+    renderKey += `${item.index}:${item.start}:${entry ? 1 : 0}:${exp},`;
   }
 
-  updateCounts();
+  if (renderKey === lastRenderKey && !measureAll) {
+    logViewport.style.height = virtualizer.getTotalSize() + "px";
+    return;
+  }
+  lastRenderKey = renderKey;
+
+  // Render cached items
+  const frag = document.createDocumentFragment();
+  let hasExpanded = false;
+  for (const item of items) {
+    const entry = entryCache.get(item.index);
+    if (!entry) continue;
+    const el = createLogElement(entry);
+    el.setAttribute("data-index", item.index);
+    el.style.cssText = `position:absolute;top:0;left:0;width:100%;transform:translateY(${item.start}px)`;
+    frag.appendChild(el);
+    if (expandedLines.has(entry.index)) hasExpanded = true;
+  }
+  contentEl.innerHTML = "";
+  contentEl.appendChild(frag);
+
+  // measureAll: after expand/collapse click, measure all visible elements so
+  // the virtualizer picks up both new expanded heights and collapsed-back-to-default.
+  // Otherwise only measure when expanded lines are visible (skip during normal scroll).
+  if (measureAll || hasExpanded) {
+    rendering = true;
+    for (const el of [...contentEl.children]) {
+      virtualizer.measureElement(el);
+    }
+    rendering = false;
+    measureAll = false;
+
+    logViewport.style.height = virtualizer.getTotalSize() + "px";
+
+    if (needsRerender) {
+      needsRerender = false;
+      render();
+    }
+  } else {
+    logViewport.style.height = virtualizer.getTotalSize() + "px";
+  }
+}
+
+// ── Public API ─────────────────────────────────────────────────────────
+
+export function scrollToBottom() {
+  if (!virtualizer || ui.filteredLogs === 0) return;
+  virtualizer.scrollToIndex(ui.filteredLogs - 1, { align: "end" });
 }
 
 export function renderAllLogs() {
-  clearBlocks();
-  renderVisible();
+  entryCache.clear();
+  pendingKey = null;
+  if (virtualizer) {
+    virtualizer.setOptions({ ...baseOpts, count: ui.filteredLogs });
+    virtualizer._willUpdate();
+    logViewport.style.height = virtualizer.getTotalSize() + "px";
+  }
+  updateCounts();
+  emptyState.classList.toggle("hidden", ui.totalLogs > 0);
   if (ui.autoScroll) scrollToBottom();
+  scheduleRender();
 }
 
-export function scrollToBottom() {
-  window.__setProgrammaticScroll?.(true);
-  logContainer.scrollTop = logContainer.scrollHeight;
-  requestAnimationFrame(() => {
-    window.__setProgrammaticScroll?.(false);
-  });
+// Called by auto-scroll on scroll events
+export function renderVisible() {
+  scheduleRender();
 }
+
+export function clearBlocks() {
+  entryCache.clear();
+  pendingKey = null;
+  lastRenderKey = "";
+  if (contentEl) contentEl.innerHTML = "";
+}
+
+// ── Init ───────────────────────────────────────────────────────────────
 
 export function initVirtualScroll() {
-  // Handle batch responses from worker
+  contentEl = document.createElement("div");
+  contentEl.style.cssText = "position:absolute;top:0;left:0;width:100%";
+  logViewport.appendChild(contentEl);
+
+  baseOpts = {
+    count: 0,
+    getScrollElement: () => logContainer,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: OVERSCAN,
+    observeElementRect,
+    observeElementOffset,
+    scrollToFn: elementScroll,
+    onChange: () => scheduleRender(),
+  };
+  virtualizer = new Virtualizer(baseOpts);
+  virtualizer._willUpdate();
+
+  // Batch responses from worker
   onWorkerMessage("batch", (msg) => {
-    const blockIdx = msg.id;
-    pendingBlocks.delete(blockIdx);
-
-    // Ignore if already rendered or no longer needed
-    if (renderedBlocks.has(blockIdx)) return;
-
-    const el = createBlockFromEntries(msg.entries, blockIdx);
-    logViewport.appendChild(el);
-    renderedBlocks.set(blockIdx, el);
+    const start = msg.start;
+    for (let i = 0; i < msg.entries.length; i++) {
+      entryCache.set(start + i, msg.entries[i]);
+    }
+    pendingKey = null;
+    scheduleRender();
   });
 
-  // Handle update notifications — new data available
-  onWorkerMessage("update", () => {
-    const prevFiltered = ui.filteredLogs;
-
-    // Invalidate the last block (it may have grown)
-    if (prevFiltered > 0) {
-      const lastBlock = Math.floor((prevFiltered - 1) / BLOCK_SIZE);
-      const el = renderedBlocks.get(lastBlock);
-      if (el) { el.remove(); renderedBlocks.delete(lastBlock); }
-      pendingBlocks.delete(lastBlock);
+  // Data update from worker
+  onWorkerMessage("update", (msg) => {
+    let filterChanged = false;
+    if (msg.filterVersion !== lastFilterVersion) {
+      entryCache.clear();
+      pendingKey = null;
+      lastFilterVersion = msg.filterVersion;
+      lastRenderKey = "";
+      filterChanged = true;
     }
 
-    logViewport.style.height = ui.filteredLogs * ROW_HEIGHT + "px";
+    virtualizer.setOptions({ ...baseOpts, count: ui.filteredLogs });
+    logViewport.style.height = virtualizer.getTotalSize() + "px";
     emptyState.classList.toggle("hidden", ui.totalLogs > 0);
+    updateCounts();
 
-    if (ui.autoScroll) scrollToBottom();
-    renderVisible();
+    if (ui.autoScroll) {
+      scrollToBottom();
+      scheduleRender();
+    } else if (filterChanged) {
+      scheduleRender();
+    }
   });
 
-  // Handle init event
+  // Init event
   onWorkerMessage("init", (msg) => {
     ui.projectName = msg.name;
     document.title = `Procfile: ${msg.name}`;
@@ -206,7 +310,7 @@ export function initVirtualScroll() {
     document.getElementById("app-addr").textContent = location.host;
   });
 
-  // Handle connection status
+  // Connection status
   onWorkerMessage("connected", (msg) => {
     const badge = document.getElementById("status-badge");
     if (msg.value) {

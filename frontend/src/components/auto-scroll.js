@@ -2,7 +2,7 @@ import { ui } from "../main.js";
 import { autoscrollToggle, logContainer } from "../lib/dom.js";
 import { scrollToBottom, renderVisible } from "./virtual-scroll.js";
 
-function updateAutoScrollBtn() {
+export function updateAutoScrollBtn() {
   if (ui.autoScroll) {
     autoscrollToggle.className =
       "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-blue-300 dark:border-blue-600 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors";
@@ -15,7 +15,6 @@ function updateAutoScrollBtn() {
 export function initAutoScroll() {
   let scrollDebounce = null;
   let programmaticScroll = false;
-  let scrollRafId = null;
 
   window.__setProgrammaticScroll = (v) => { programmaticScroll = v; };
 
@@ -43,11 +42,7 @@ export function initAutoScroll() {
         }, 150);
       }
     }
-    if (scrollRafId === null) {
-      scrollRafId = requestAnimationFrame(() => {
-        scrollRafId = null;
-        renderVisible();
-      });
-    }
+    // renderVisible() already coalesces via scheduleRender/RAF
+    renderVisible();
   });
 }
