@@ -57,7 +57,7 @@ function rebuildProcessFilter() {
   }
 }
 
-export { closeAllDropdowns, setupDropdown };
+export { closeAllDropdowns, setupDropdown, rebuildProcessFilter };
 
 export function initProcessFilter() {
   setupDropdown(processFilterBtn, processFilterDropdown);

@@ -13,7 +13,7 @@ const LEVELS = [
   { key: "none", label: "No level", color: "#6b7280" },
 ];
 
-function rebuildLevelFilter() {
+export function rebuildLevelFilter() {
   levelFilterDropdown.innerHTML = "";
   for (const { key, label, color } of LEVELS) {
     const btn = document.createElement("button");

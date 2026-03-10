@@ -5,6 +5,7 @@ import { Virtualizer, elementScroll, observeElementOffset, observeElementRect } 
 import { ui, onWorkerMessage } from "../main.js";
 import { logViewport, logContainer, emptyState, logCountEl, filterCount, downloadFiltered } from "../lib/dom.js";
 import { updateAutoScrollBtn } from "./auto-scroll.js";
+import { clearAllFilters } from "./search.js";
 
 const LEVEL_LETTERS = { debug: "D", info: "I", warn: "W", error: "E", fatal: "F" };
 const ROW_HEIGHT = 24;
@@ -27,6 +28,8 @@ let needsRerender = false;
 let renderScheduled = false;
 let measureAll = false; // set on expand/collapse to remeasure all visible elements
 let lastRenderKey = ""; // tracks what's in the DOM to skip unnecessary rebuilds
+let selectedRawIndex = -1; // raw log index of the selected (highlighted) line
+let pendingScrollToRaw = -1; // raw index to scroll to after filters clear
 
 // ── Log element factory ───────────────────────────────────────────────
 
@@ -41,7 +44,7 @@ function createLogElement(entry) {
   idx.textContent = "0x" + entry.index.toString(16).toUpperCase();
 
   const ts = document.createElement("span");
-  ts.className = "flex-none w-16 text-gray-400 dark:text-gray-500 text-xs leading-relaxed";
+  ts.className = "flex-none w-16 text-gray-400 dark:text-gray-500 text-xs leading-relaxed cursor-pointer hover:text-blue-500 dark:hover:text-blue-400";
   ts.textContent = entry.timestamp;
 
   const proc = document.createElement("span");
@@ -68,6 +71,10 @@ function createLogElement(entry) {
     content.classList.add("whitespace-pre-wrap", "break-all");
   }
 
+  if (entry.index === selectedRawIndex) {
+    div.classList.add("log-line-selected");
+  }
+
   idx.addEventListener("click", (e) => {
     e.stopPropagation();
     if (expandedLines.has(entry.index)) {
@@ -81,6 +88,24 @@ function createLogElement(entry) {
     measureAll = true;
     lastRenderKey = "";
     render();
+  });
+
+  ts.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (selectedRawIndex === entry.index) {
+      // Deselect
+      selectedRawIndex = -1;
+      lastRenderKey = "";
+      render();
+      return;
+    }
+    selectedRawIndex = entry.index;
+    ui.autoScroll = false;
+    updateAutoScrollBtn();
+    // Clear all filters so raw index == filtered index, then scroll
+    pendingScrollToRaw = entry.index;
+    clearAllFilters();
+    renderAllLogs();
   });
 
   div.appendChild(idx);
@@ -165,7 +190,7 @@ function render() {
 
   // Build a render key to skip DOM rebuild when nothing visible has changed.
   // Includes index, position, cache presence, and expand state.
-  let renderKey = "";
+  let renderKey = `sel:${selectedRawIndex};`;
   for (const item of items) {
     const entry = entryCache.get(item.index);
     const exp = entry && expandedLines.has(entry.index) ? 1 : 0;
@@ -294,7 +319,15 @@ export function initVirtualScroll() {
     emptyState.classList.toggle("hidden", ui.totalLogs > 0);
     updateCounts();
 
-    if (ui.autoScroll) {
+    // After filters clear, scroll to the selected line
+    if (pendingScrollToRaw >= 0 && filterChanged) {
+      // With no filters, raw index == filtered index
+      ui.autoScroll = false;
+      updateAutoScrollBtn();
+      virtualizer.scrollToIndex(pendingScrollToRaw, { align: "center" });
+      pendingScrollToRaw = -1;
+      scheduleRender();
+    } else if (ui.autoScroll) {
       scrollToBottom();
       scheduleRender();
     } else if (filterChanged) {

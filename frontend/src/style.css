@@ -129,6 +129,16 @@
   background: rgba(217, 119, 6, 0.25);
 }
 
+.log-line-selected {
+  background: rgba(59, 130, 246, 0.1) !important;
+  box-shadow: inset 3px 0 0 #3b82f6;
+}
+
+.dark .log-line-selected {
+  background: rgba(59, 130, 246, 0.15) !important;
+  box-shadow: inset 3px 0 0 #60a5fa;
+}
+
 .level-badge { opacity: 0.7; }
 .level-badge-none { color: #9ca3af; }
 .level-badge-debug { color: #9ca3af; }

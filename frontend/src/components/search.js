@@ -1,6 +1,8 @@
 import { ui } from "../main.js";
-import { searchInput, searchClear, searchBar, searchCaseBtn, searchWordBtn, searchRegexBtn, searchError } from "../lib/dom.js";
+import { searchInput, searchClear, searchBar, searchCaseBtn, searchWordBtn, searchRegexBtn, searchError, tokenFilterBar, tokenFilterTags } from "../lib/dom.js";
 import { renderAllLogs } from "./virtual-scroll.js";
+import { rebuildProcessFilter } from "./process-filter.js";
+import { rebuildLevelFilter } from "./level-filter.js";
 
 const TOGGLE_ACTIVE =
   "px-2 h-full text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors leading-none";
@@ -54,6 +56,27 @@ function applySearch() {
   validateRegex();
   sendFilter();
   renderAllLogs();
+}
+
+// Clear all filters (search, processes, levels, tokens) and notify worker
+export function clearAllFilters() {
+  searchInput.value = "";
+  ui.searchQuery = "";
+  ui.searchCaseSensitive = false;
+  ui.searchWholeWord = false;
+  ui.searchRegex = false;
+  ui.hiddenProcesses.clear();
+  ui.hiddenLevels.clear();
+  ui.activeTokens.clear();
+  searchClear.classList.add("hidden");
+  searchError.classList.add("hidden");
+  searchBar.classList.remove("!border-red-400", "dark:!border-red-500");
+  tokenFilterBar.classList.add("hidden");
+  tokenFilterTags.innerHTML = "";
+  updateSearchToggles();
+  rebuildProcessFilter();
+  rebuildLevelFilter();
+  sendFilter();
 }
 
 // Exported so process-filter can also trigger filter updates
