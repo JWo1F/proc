@@ -180,11 +180,8 @@ export function initVirtualScroll() {
   });
 
   // Handle update notifications — new data available
-  onWorkerMessage("update", (msg) => {
+  onWorkerMessage("update", () => {
     const prevFiltered = ui.filteredLogs;
-    ui.totalLogs = msg.total;
-    ui.filteredLogs = msg.filtered;
-    ui.processes = new Map(msg.processes);
 
     // Invalidate the last block (it may have grown)
     if (prevFiltered > 0) {

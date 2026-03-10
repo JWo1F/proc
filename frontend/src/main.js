@@ -45,6 +45,14 @@ worker.onmessage = (e) => {
   if (fns) fns.forEach((fn) => fn(e.data));
 };
 
+// ── Sync shared state from worker before any component handlers run ───
+
+onWorkerMessage("update", (msg) => {
+  ui.totalLogs = msg.total;
+  ui.filteredLogs = msg.filtered;
+  ui.processes = new Map(msg.processes);
+});
+
 // ── Init ───────────────────────────────────────────────────────────────
 
 initTheme();

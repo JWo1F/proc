@@ -2,14 +2,19 @@
 //!
 //! Each process is spawned inside its own PTY, and output lines are
 //! multiplexed to stdout with a colored name prefix.
+//!
+//! Also supports pipe mode: `my_command | procfile` reads stdin and
+//! displays it through the same stdout/web consumers.
 
 use crate::core::manager::{ProcessManager, RunningMode};
 use clap::Parser;
 use std::fs;
+use std::io::IsTerminal;
 use std::process::ExitCode;
 use tokio::sync::broadcast;
 
 mod core;
+mod pipe;
 mod stdout;
 #[cfg(feature = "web")]
 mod web;
@@ -71,19 +76,7 @@ struct Args {
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() -> ExitCode {
   let args = Args::parse();
-
-  let config = match fs::read_to_string(&args.config) {
-    Ok(config) => config,
-    Err(err) => {
-      match err.kind() {
-        std::io::ErrorKind::NotFound => eprintln!("{}: file not found", args.config),
-        std::io::ErrorKind::InvalidData => eprintln!("{}: not a valid text file", args.config),
-        _ => eprintln!("Error reading {}: {}", args.config, err),
-      }
-
-      return 2.into();
-    }
-  };
+  let piped = !std::io::stdin().is_terminal();
 
   // Create the broadcast channel for log events.
   // Core sends via tx; stdout and web receive via rx.
@@ -99,19 +92,44 @@ pub async fn main() -> ExitCode {
     None
   };
 
-  let mut manager = match ProcessManager::from_string(
-    &config,
-    args.mode,
-    &args.exclude,
-    &args.include,
-    log_tx,
-  ) {
-    Ok(manager) => manager,
-    Err(err) => {
-      eprintln!("Error parsing Procfile\n{}", err);
-      return 2.into();
+  let name_width = if piped { "stdin".len() } else { 0 };
+
+  // In Procfile mode, parse the config and build the manager.
+  let mut manager = if !piped {
+    let config = match fs::read_to_string(&args.config) {
+      Ok(config) => config,
+      Err(err) => {
+        match err.kind() {
+          std::io::ErrorKind::NotFound => eprintln!("{}: file not found", args.config),
+          std::io::ErrorKind::InvalidData => eprintln!("{}: not a valid text file", args.config),
+          _ => eprintln!("Error reading {}: {}", args.config, err),
+        }
+
+        return 2.into();
+      }
+    };
+
+    match ProcessManager::from_string(
+      &config,
+      args.mode,
+      &args.exclude,
+      &args.include,
+      log_tx.clone(),
+    ) {
+      Ok(manager) => Some(manager),
+      Err(err) => {
+        eprintln!("Error parsing Procfile\n{}", err);
+        return 2.into();
+      }
     }
+  } else {
+    None
   };
+
+  let actual_name_width = manager
+    .as_ref()
+    .map(|m| m.name_width())
+    .unwrap_or(name_width);
 
   // Start stdout consumer
   let stdout_handle = tokio::spawn(stdout::run(
@@ -119,7 +137,7 @@ pub async fn main() -> ExitCode {
     stdout::StdoutConfig {
       timestamps: args.timestamps,
       compact: args.compact,
-      name_width: manager.name_width(),
+      name_width: actual_name_width,
     },
   ));
 
@@ -137,12 +155,15 @@ pub async fn main() -> ExitCode {
     });
   }
 
-  // Run the core event loop (blocks until all processes exit)
-  let exit_code = manager.start().await;
+  // Run: pipe mode reads stdin, Procfile mode runs the process manager.
+  let exit_code = if piped {
+    pipe::run(log_tx).await
+  } else {
+    let code = manager.as_mut().unwrap().start().await;
+    drop(manager);
+    code
+  };
 
-  // Drop the manager to close the broadcast channel,
-  // allowing consumers to drain and finish.
-  drop(manager);
   let _ = stdout_handle.await;
 
   exit_code.into()
