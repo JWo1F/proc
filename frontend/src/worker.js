@@ -28,6 +28,13 @@ let updateTimer = null;
 
 // ── Entry processing ───────────────────────────────────────────────────
 
+const pad2 = (n) => (n < 10 ? "0" : "") + n;
+
+function formatTimestamp(unixSeconds) {
+  const d = new Date(unixSeconds * 1000);
+  return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+}
+
 function processEntry(raw) {
   const html = tokenifyHtml(linkifyHtml(ansiToHtml(raw.line)));
   const plain = stripAnsi(raw.line);
@@ -40,7 +47,7 @@ function processEntry(raw) {
     line: plain,
     level,
     system: raw.sys,
-    timestamp: raw.ts,
+    timestamp: formatTimestamp(raw.ts),
   };
 }
 

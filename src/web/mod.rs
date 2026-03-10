@@ -10,7 +10,6 @@ use std::sync::Arc;
 use store::LogStore;
 use tokio::sync::broadcast;
 
-const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
 /// Safe port range for deterministic hashing.
 const PORT_RANGE_START: u16 = 2592;
 const PORT_RANGE_END: u16 = 65535;
@@ -37,11 +36,10 @@ async fn log_consumer(mut rx: broadcast::Receiver<LogEvent>, store: Arc<LogStore
   loop {
     match rx.recv().await {
       Ok(event) => {
-        let timestamp = chrono::Local::now()
-          .format(TIMESTAMP_FORMAT)
-          .to_string();
+        let now = chrono::Utc::now();
+        let ts = now.timestamp() as f64 + now.timestamp_subsec_millis() as f64 / 1000.0;
         let css_color = color_to_css(&event.color);
-        store.push(&event.process, &css_color, &event.line, &timestamp, event.system);
+        store.push(&event.process, &css_color, &event.line, ts, event.system);
       }
       Err(broadcast::error::RecvError::Closed) => break,
       Err(broadcast::error::RecvError::Lagged(_)) => {}

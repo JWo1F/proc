@@ -9,7 +9,7 @@ pub(super) struct LogEntry {
   pub process: String,
   pub color: String,
   pub line: String,
-  pub timestamp: String,
+  pub timestamp: f64,
   pub system: bool,
 }
 
@@ -30,14 +30,14 @@ impl LogStore {
     }
   }
 
-  pub fn push(&self, process: &str, color: &str, line: &str, timestamp: &str, system: bool) {
+  pub fn push(&self, process: &str, color: &str, line: &str, timestamp: f64, system: bool) {
     let index = self.counter.fetch_add(1, Ordering::Relaxed);
     let entry = LogEntry {
       index,
       process: process.to_string(),
       color: color.to_string(),
       line: line.to_string(),
-      timestamp: timestamp.to_string(),
+      timestamp,
       system,
     };
 

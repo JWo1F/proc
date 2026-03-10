@@ -20,7 +20,7 @@ fn entry_to_sse(entry: &LogEntry) -> Result<Event, Infallible> {
     "{{\"process\":{},\"color\":{},\"ts\":{},\"sys\":{},\"line\":{}}}",
     json_str(&entry.process),
     json_str(&entry.color),
-    json_str(&entry.timestamp),
+    entry.timestamp,
     entry.system,
     json_str(&entry.line),
   );
