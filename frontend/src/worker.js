@@ -3,6 +3,7 @@
 
 import { ansiToHtml, stripAnsi } from "./lib/ansi.js";
 import { linkifyHtml } from "./lib/linkify.js";
+import { tokenifyHtml } from "./lib/tokens.js";
 import { detectLevel } from "./lib/levels.js";
 
 // ── State ──────────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ let filter = {
   regex: false,
   hiddenProcesses: [],
   hiddenLevels: [],
+  activeTokens: [],
 };
 let compiledRegex = null;
 
@@ -27,7 +29,7 @@ let updateTimer = null;
 // ── Entry processing ───────────────────────────────────────────────────
 
 function processEntry(raw) {
-  const html = linkifyHtml(ansiToHtml(raw.line));
+  const html = tokenifyHtml(linkifyHtml(ansiToHtml(raw.line)));
   const plain = stripAnsi(raw.line);
   const level = detectLevel(plain);
   return {
@@ -65,6 +67,14 @@ function matchesFilter(entry) {
   if (hLevels.length > 0) {
     const lvl = entry.level || "none";
     if (hLevels.includes(lvl)) return false;
+  }
+  // Token filter — line must contain ALL active tokens (AND logic)
+  const tokens = filter.activeTokens;
+  if (tokens.length > 0) {
+    const lower = entry.line.toLowerCase();
+    for (let t = 0; t < tokens.length; t++) {
+      if (!lower.includes(tokens[t])) return false;
+    }
   }
   if (!filter.query || !compiledRegex) return true;
   compiledRegex.lastIndex = 0;
@@ -182,6 +192,7 @@ self.onmessage = (e) => {
         regex: !!msg.regex,
         hiddenProcesses: msg.hiddenProcesses || [],
         hiddenLevels: msg.hiddenLevels || [],
+        activeTokens: (msg.activeTokens || []).map((t) => t.toLowerCase()),
       };
       rebuildFilter();
       sendUpdate();

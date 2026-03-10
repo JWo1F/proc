@@ -111,6 +111,24 @@
   background: rgba(239, 68, 68, 0.06);
 }
 
+.log-token {
+  cursor: pointer;
+  border-radius: 2px;
+  padding: 0 1px;
+  transition: background-color 0.1s;
+}
+
+.log-token:hover {
+  background: rgba(217, 119, 6, 0.2);
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.dark .log-token:hover {
+  background: rgba(217, 119, 6, 0.25);
+}
+
 .level-badge { opacity: 0.7; }
 .level-badge-none { color: #9ca3af; }
 .level-badge-debug { color: #9ca3af; }

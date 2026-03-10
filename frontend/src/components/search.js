@@ -44,6 +44,7 @@ function sendFilter() {
     regex: ui.searchRegex,
     hiddenProcesses: Array.from(ui.hiddenProcesses),
     hiddenLevels: Array.from(ui.hiddenLevels),
+    activeTokens: Array.from(ui.activeTokens),
   });
 }
 

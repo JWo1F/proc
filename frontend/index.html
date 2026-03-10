@@ -314,6 +314,22 @@
             </div>
         </header>
 
+        <!-- Token filter bar -->
+        <div
+            id="token-filter-bar"
+            class="hidden flex-none flex items-center gap-2 px-4 py-1.5 border-b border-gray-200 dark:border-gray-800 bg-amber-50 dark:bg-amber-950/30"
+        >
+            <svg class="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 flex-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+            <span class="text-xs text-amber-700 dark:text-amber-300 font-medium flex-none">Correlating:</span>
+            <div id="token-filter-tags" class="flex items-center gap-1.5 flex-wrap"></div>
+            <button
+                id="token-filter-clear"
+                class="ml-auto text-xs text-amber-600 dark:text-amber-400 hover:text-amber-800 dark:hover:text-amber-200 font-medium flex-none"
+            >Clear all</button>
+        </div>
+
         <!-- Log container -->
         <div
             id="log-container"

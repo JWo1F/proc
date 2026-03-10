@@ -7,6 +7,7 @@ import { initProcessFilter } from "./components/process-filter.js";
 import { initLevelFilter } from "./components/level-filter.js";
 import { initDownloads } from "./components/downloads.js";
 import { initVirtualScroll } from "./components/virtual-scroll.js";
+import { initTokenFilter } from "./components/token-filter.js";
 
 // ── Shared UI state ────────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ export const ui = {
   searchCaseSensitive: false,
   searchWholeWord: false,
   searchRegex: false,
+  activeTokens: new Set(),   // token values for cross-process correlation
 };
 
 // ── Worker setup ───────────────────────────────────────────────────────
@@ -51,4 +53,5 @@ initSearch();
 initProcessFilter();
 initLevelFilter();
 initDownloads();
+initTokenFilter();
 initVirtualScroll();

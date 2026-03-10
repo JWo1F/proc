@@ -83,7 +83,7 @@ function createBlockFromEntries(entries, blockIdx) {
 
 function updateCounts() {
   logCountEl.textContent = `${ui.totalLogs} lines`;
-  const hasFilter = ui.searchQuery || ui.hiddenProcesses.size > 0;
+  const hasFilter = ui.searchQuery || ui.hiddenProcesses.size > 0 || ui.activeTokens.size > 0;
   if (hasFilter && ui.filteredLogs !== ui.totalLogs) {
     filterCount.textContent = `${ui.filteredLogs} / ${ui.totalLogs}`;
     filterCount.classList.remove("hidden");

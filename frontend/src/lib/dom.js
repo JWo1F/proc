@@ -39,3 +39,8 @@ export const downloadBtn = $("download-btn");
 export const downloadDropdown = $("download-dropdown");
 export const downloadAll = $("download-all");
 export const downloadFiltered = $("download-filtered");
+
+// Token filter
+export const tokenFilterBar = $("token-filter-bar");
+export const tokenFilterTags = $("token-filter-tags");
+export const tokenFilterClear = $("token-filter-clear");
