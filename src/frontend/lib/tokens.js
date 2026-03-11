@@ -30,9 +30,10 @@ const PATTERNS = [
     token: (m) => m[0],
   },
   // 4. key=value — whole match is clickable, filter by value part
+  //    value may contain ::, ., / for class names (Hubspot::Contacts::SyncWorker)
   {
-    re: /\b(\w+)=([\w-]{4,})\b/g,
-    token: (m) => m[2],
+    re: /\b(\w+)=([\w.:/-]+)\b/g,
+    token: (m) => m[0],
   },
   // 5. Standalone hex string (8–32 chars)
   {
