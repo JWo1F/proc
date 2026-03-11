@@ -1,5 +1,15 @@
 import { ui } from "../main.js";
-import { searchInput, searchClear, searchBar, searchCaseBtn, searchWordBtn, searchRegexBtn, searchError, tokenFilterBar, tokenFilterTags } from "../lib/dom.js";
+import {
+  searchInput,
+  searchClear,
+  searchBar,
+  searchCaseBtn,
+  searchWordBtn,
+  searchRegexBtn,
+  searchError,
+  tokenFilterBar,
+  tokenFilterTags,
+} from "../lib/dom.js";
 import { renderAllLogs } from "./virtual-scroll.js";
 import { rebuildProcessFilter } from "./process-filter.js";
 import { rebuildLevelFilter } from "./level-filter.js";
@@ -10,13 +20,22 @@ const TOGGLE_INACTIVE =
   "px-2 h-full text-xs font-bold text-gray-400 dark:text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors leading-none";
 
 function updateToggleBtn(btn, active, extraClass) {
-  btn.className = (active ? TOGGLE_ACTIVE : TOGGLE_INACTIVE) + (extraClass || "");
+  btn.className =
+    (active ? TOGGLE_ACTIVE : TOGGLE_INACTIVE) + (extraClass || "");
 }
 
 function updateSearchToggles() {
   updateToggleBtn(searchCaseBtn, ui.searchCaseSensitive);
-  updateToggleBtn(searchWordBtn, ui.searchWholeWord, " border-l border-gray-300 dark:border-gray-700");
-  updateToggleBtn(searchRegexBtn, ui.searchRegex, " border-l border-gray-300 dark:border-gray-700");
+  updateToggleBtn(
+    searchWordBtn,
+    ui.searchWholeWord,
+    " border-l border-gray-300 dark:border-gray-700",
+  );
+  updateToggleBtn(
+    searchRegexBtn,
+    ui.searchRegex,
+    " border-l border-gray-300 dark:border-gray-700",
+  );
 }
 
 function validateRegex() {
@@ -30,7 +49,10 @@ function validateRegex() {
     searchError.classList.add("hidden");
     searchBar.classList.remove("!border-red-400", "dark:!border-red-500");
   } catch (e) {
-    searchError.textContent = e.message.replace("Invalid regular expression: ", "");
+    searchError.textContent = e.message.replace(
+      "Invalid regular expression: ",
+      "",
+    );
     searchError.title = e.message;
     searchError.classList.remove("hidden");
     searchBar.classList.add("!border-red-400", "dark:!border-red-500");

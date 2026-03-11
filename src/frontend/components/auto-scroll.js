@@ -16,7 +16,9 @@ export function initAutoScroll() {
   let scrollDebounce = null;
   let programmaticScroll = false;
 
-  window.__setProgrammaticScroll = (v) => { programmaticScroll = v; };
+  window.__setProgrammaticScroll = (v) => {
+    programmaticScroll = v;
+  };
 
   autoscrollToggle.addEventListener("click", () => {
     ui.autoScroll = !ui.autoScroll;
@@ -35,7 +37,12 @@ export function initAutoScroll() {
       if (distFromBottom <= 1 && !ui.autoScroll) {
         clearTimeout(scrollDebounce);
         scrollDebounce = setTimeout(() => {
-          if (logContainer.scrollHeight - logContainer.scrollTop - logContainer.clientHeight <= 1) {
+          if (
+            logContainer.scrollHeight -
+              logContainer.scrollTop -
+              logContainer.clientHeight <=
+            1
+          ) {
             ui.autoScroll = true;
             updateAutoScrollBtn();
           }

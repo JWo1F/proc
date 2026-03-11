@@ -1,19 +1,37 @@
 // Virtual scrolling powered by @tanstack/virtual-core.
 // Requests visible entries from the worker on demand.
 
-import { Virtualizer, elementScroll, observeElementOffset, observeElementRect } from "@tanstack/virtual-core";
+import {
+  Virtualizer,
+  elementScroll,
+  observeElementOffset,
+  observeElementRect,
+} from "@tanstack/virtual-core";
 import { ui, onWorkerMessage } from "../main.js";
-import { logViewport, logContainer, emptyState, logCountEl, filterCount, downloadFiltered } from "../lib/dom.js";
+import {
+  logViewport,
+  logContainer,
+  emptyState,
+  logCountEl,
+  filterCount,
+  downloadFiltered,
+} from "../lib/dom.js";
 import { updateAutoScrollBtn } from "./auto-scroll.js";
 import { clearAllFilters } from "./search.js";
 
-const LEVEL_LETTERS = { debug: "D", info: "I", warn: "W", error: "E", fatal: "F" };
+const LEVEL_LETTERS = {
+  debug: "D",
+  info: "I",
+  warn: "W",
+  error: "E",
+  fatal: "F",
+};
 const ROW_HEIGHT = 24;
 const OVERSCAN = 50;
 
 // ── Cache ─────────────────────────────────────────────────────────────
 
-const entryCache = new Map();   // filteredIndex → entry
+const entryCache = new Map(); // filteredIndex → entry
 const expandedLines = new Set(); // raw log indices of expanded lines
 let lastFilterVersion = -1;
 let pendingKey = null;
@@ -35,25 +53,31 @@ let pendingScrollToRaw = -1; // raw index to scroll to after filters clear
 
 function createLogElement(entry) {
   const div = document.createElement("div");
-  let cls = "log-line flex items-start gap-3 px-2 py-0.5 rounded font-mono text-[13px] leading-relaxed";
+  let cls =
+    "log-line flex items-start gap-3 px-2 py-0.5 rounded font-mono text-[13px] leading-relaxed";
   if (entry.level) cls += ` level-${entry.level}`;
   div.className = cls;
 
   const idx = document.createElement("span");
-  idx.className = "flex-none w-12 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed cursor-pointer";
+  idx.className =
+    "flex-none w-12 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed cursor-pointer";
   idx.textContent = "0x" + entry.index.toString(16).toUpperCase();
 
   const ts = document.createElement("span");
-  ts.className = "flex-none w-16 text-gray-400 dark:text-gray-500 text-xs leading-relaxed cursor-pointer hover:text-blue-500 dark:hover:text-blue-400";
+  ts.className =
+    "flex-none w-16 text-gray-400 dark:text-gray-500 text-xs leading-relaxed cursor-pointer hover:text-blue-500 dark:hover:text-blue-400";
   ts.textContent = entry.timestamp;
 
   const proc = document.createElement("span");
-  proc.className = "flex-none w-20 truncate text-xs font-medium leading-relaxed";
+  proc.className =
+    "flex-none w-20 truncate text-xs font-medium leading-relaxed";
   proc.style.color = entry.color;
   proc.textContent = entry.process;
 
   const lvl = document.createElement("span");
-  lvl.className = "flex-none w-4 text-center text-xs font-bold leading-relaxed level-badge level-badge-" + (entry.level || "none");
+  lvl.className =
+    "flex-none w-4 text-center text-xs font-bold leading-relaxed level-badge level-badge-" +
+    (entry.level || "none");
   lvl.textContent = LEVEL_LETTERS[entry.level] || "-";
 
   const content = document.createElement("span");
@@ -121,7 +145,8 @@ function createLogElement(entry) {
 
 function updateCounts() {
   logCountEl.textContent = `${ui.totalLogs} lines`;
-  const hasFilter = ui.searchQuery || ui.hiddenProcesses.size > 0 || ui.activeTokens.size > 0;
+  const hasFilter =
+    ui.searchQuery || ui.hiddenProcesses.size > 0 || ui.activeTokens.size > 0;
   if (hasFilter && ui.filteredLogs !== ui.totalLogs) {
     filterCount.textContent = `${ui.filteredLogs} / ${ui.totalLogs}`;
     filterCount.classList.remove("hidden");
@@ -347,11 +372,15 @@ export function initVirtualScroll() {
   onWorkerMessage("connected", (msg) => {
     const badge = document.getElementById("status-badge");
     if (msg.value) {
-      badge.className = "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400";
-      badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span><span>connected</span>';
+      badge.className =
+        "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400";
+      badge.innerHTML =
+        '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span><span>connected</span>';
     } else {
-      badge.className = "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
-      badge.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span>disconnected</span>';
+      badge.className =
+        "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
+      badge.innerHTML =
+        '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span>disconnected</span>';
     }
   });
 }

@@ -13,8 +13,12 @@ export function linkifyHtml(html) {
         const trimmed = url.replace(/[.,;:!?]+$/, "");
         const tail = url.slice(trimmed.length);
         return (
-          '<a href="' + trimmed + '" target="_blank" rel="noopener noreferrer" class="ansi-link">' +
-          trimmed + "</a>" + tail
+          '<a href="' +
+          trimmed +
+          '" target="_blank" rel="noopener noreferrer" class="ansi-link">' +
+          trimmed +
+          "</a>" +
+          tail
         );
       });
     })

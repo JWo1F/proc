@@ -3,7 +3,7 @@ use axum::response::{IntoResponse, Response};
 use rust_embed::Embed;
 
 #[derive(Embed)]
-#[folder = "frontend/dist"]
+#[folder = "dist"]
 struct FrontendAssets;
 
 pub(super) async fn handler(uri: Uri) -> Response {

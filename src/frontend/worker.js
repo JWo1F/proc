@@ -33,7 +33,9 @@ const pad2 = (n) => (n < 10 ? "0" : "") + n;
 
 function formatTimestamp(unixSeconds) {
   const d = new Date(unixSeconds * 1000);
-  return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  return (
+    pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds())
+  );
 }
 
 function processEntry(raw) {
@@ -55,7 +57,10 @@ function processEntry(raw) {
 // ── Filtering ──────────────────────────────────────────────────────────
 
 function buildRegex() {
-  if (!filter.query) { compiledRegex = null; return; }
+  if (!filter.query) {
+    compiledRegex = null;
+    return;
+  }
   try {
     const flags = filter.caseSensitive ? "g" : "gi";
     let pattern = filter.regex
@@ -105,7 +110,10 @@ function applyHighlights(entry) {
   const html = entry.html.replace(/(<[^>]+>)|([^<]+)/g, (m, tag, text) => {
     if (tag) return tag;
     compiledRegex.lastIndex = 0;
-    return text.replace(compiledRegex, '<span class="search-highlight">$&</span>');
+    return text.replace(
+      compiledRegex,
+      '<span class="search-highlight">$&</span>',
+    );
   });
   return { ...entry, html };
 }
@@ -189,7 +197,12 @@ self.onmessage = (e) => {
       for (let i = msg.start; i < end; i++) {
         entries.push(applyHighlights(allLogs[filteredIndices[i]]));
       }
-      self.postMessage({ type: "batch", id: msg.id, start: msg.start, entries });
+      self.postMessage({
+        type: "batch",
+        id: msg.id,
+        start: msg.start,
+        entries,
+      });
       break;
     }
 

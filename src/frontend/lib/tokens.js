@@ -54,7 +54,10 @@ function tokenifyText(text) {
       const end = start + m[0].length;
       let dominated = false;
       for (let i = 0; i < occupied.length; i++) {
-        if (start < occupied[i][1] && end > occupied[i][0]) { dominated = true; break; }
+        if (start < occupied[i][1] && end > occupied[i][0]) {
+          dominated = true;
+          break;
+        }
       }
       if (dominated) continue;
       matches.push({ start, end, display: m[0], token: pat.token(m) });
@@ -70,7 +73,12 @@ function tokenifyText(text) {
   let pos = 0;
   for (const m of matches) {
     result += text.slice(pos, m.start);
-    result += '<span class="log-token" data-token="' + escapeAttr(m.token) + '">' + m.display + "</span>";
+    result +=
+      '<span class="log-token" data-token="' +
+      escapeAttr(m.token) +
+      '">' +
+      m.display +
+      "</span>";
     pos = m.end;
   }
   result += text.slice(pos);

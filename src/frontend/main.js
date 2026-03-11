@@ -17,19 +17,21 @@ export const ui = {
   projectName: "procfile",
   totalLogs: 0,
   filteredLogs: 0,
-  processes: new Map(),       // name → color
+  processes: new Map(), // name → color
   hiddenProcesses: new Set(),
   hiddenLevels: new Set(),
   searchQuery: "",
   searchCaseSensitive: false,
   searchWholeWord: false,
   searchRegex: false,
-  activeTokens: new Set(),   // token values for cross-process correlation
+  activeTokens: new Set(), // token values for cross-process correlation
 };
 
 // ── Worker setup ───────────────────────────────────────────────────────
 
-const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+const worker = new Worker(new URL("./worker.js", import.meta.url), {
+  type: "module",
+});
 ui.worker = worker;
 
 // Dispatch worker messages to registered handlers

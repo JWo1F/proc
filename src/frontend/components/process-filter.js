@@ -1,5 +1,11 @@
 import { ui, onWorkerMessage } from "../main.js";
-import { processFilterBtn, processFilterDropdown, downloadBtn, downloadDropdown, levelFilterDropdown } from "../lib/dom.js";
+import {
+  processFilterBtn,
+  processFilterDropdown,
+  downloadBtn,
+  downloadDropdown,
+  levelFilterDropdown,
+} from "../lib/dom.js";
 import { renderAllLogs } from "./virtual-scroll.js";
 import { sendFilter } from "./search.js";
 

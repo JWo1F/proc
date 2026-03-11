@@ -3,7 +3,9 @@ import { themeToggle, themeIconLight, themeIconDark } from "../lib/dom.js";
 function getTheme() {
   return (
     localStorage.getItem("procfile-theme") ||
-    (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+    (window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light")
   );
 }
 

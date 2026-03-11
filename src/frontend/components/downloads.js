@@ -34,7 +34,9 @@ function downloadText(filename, text) {
 }
 
 function logsToText(entries) {
-  return entries.map((e) => `${e.timestamp} [${e.process}] ${e.line}`).join("\n");
+  return entries
+    .map((e) => `${e.timestamp} [${e.process}] ${e.line}`)
+    .join("\n");
 }
 
 function dateSuffix() {
@@ -56,12 +58,18 @@ export function initDownloads() {
   downloadAll.addEventListener("click", async () => {
     closeAllDropdowns();
     const entries = await requestLogs("getAll");
-    downloadText(`${ui.projectName}-logs-${dateSuffix()}.txt`, logsToText(entries));
+    downloadText(
+      `${ui.projectName}-logs-${dateSuffix()}.txt`,
+      logsToText(entries),
+    );
   });
 
   downloadFiltered.addEventListener("click", async () => {
     closeAllDropdowns();
     const entries = await requestLogs("getFiltered");
-    downloadText(`${ui.projectName}-logs-filtered-${dateSuffix()}.txt`, logsToText(entries));
+    downloadText(
+      `${ui.projectName}-logs-filtered-${dateSuffix()}.txt`,
+      logsToText(entries),
+    );
   });
 }

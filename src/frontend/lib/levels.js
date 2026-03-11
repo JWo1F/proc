@@ -1,6 +1,7 @@
 // Log level detection from plain text lines.
 
-const LEVEL_RE = /\b(DEBUG|TRACE|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL|CRIT|PANIC)\b/i;
+const LEVEL_RE =
+  /\b(DEBUG|TRACE|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL|CRIT|PANIC)\b/i;
 
 const LEVEL_MAP = {
   trace: "debug",

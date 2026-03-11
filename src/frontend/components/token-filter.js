@@ -4,7 +4,12 @@
 import { ui } from "../main.js";
 import { sendFilter } from "./search.js";
 import { renderAllLogs } from "./virtual-scroll.js";
-import { tokenFilterBar, tokenFilterTags, tokenFilterClear, logViewport } from "../lib/dom.js";
+import {
+  tokenFilterBar,
+  tokenFilterTags,
+  tokenFilterClear,
+  logViewport,
+} from "../lib/dom.js";
 
 function renderTokenBar() {
   const hasTokens = ui.activeTokens.size > 0;
@@ -23,7 +28,8 @@ function renderTokenBar() {
     label.title = token;
 
     const close = document.createElement("button");
-    close.className = "text-amber-500 hover:text-amber-800 dark:hover:text-amber-100 leading-none";
+    close.className =
+      "text-amber-500 hover:text-amber-800 dark:hover:text-amber-100 leading-none";
     close.innerHTML = "&#x2715;";
     close.addEventListener("click", (e) => {
       e.stopPropagation();

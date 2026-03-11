@@ -131,10 +131,24 @@
   box-shadow: inset 3px 0 0 #60a5fa;
 }
 
-.level-badge { opacity: 0.7; }
-.level-badge-none { color: #9ca3af; }
-.level-badge-debug { color: #9ca3af; }
-.level-badge-info { color: #3b82f6; }
-.level-badge-warn { color: #eab308; }
-.level-badge-error { color: #ef4444; }
-.level-badge-fatal { color: #dc2626; }
+.level-badge {
+  opacity: 0.7;
+}
+.level-badge-none {
+  color: #9ca3af;
+}
+.level-badge-debug {
+  color: #9ca3af;
+}
+.level-badge-info {
+  color: #3b82f6;
+}
+.level-badge-warn {
+  color: #eab308;
+}
+.level-badge-error {
+  color: #ef4444;
+}
+.level-badge-fatal {
+  color: #dc2626;
+}
