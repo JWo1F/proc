@@ -1,13 +1,12 @@
 const COMMENT_PREFIX: char = '#';
-const DISABLED_PREFIX: char = '_';
 const NAME_CMD_SEPARATOR: &str = ":";
 
-/// Parse Procfile lines into (name, cmd) pairs, applying exclude/include filters.
-/// Lines starting with `#` are comments; names starting with `_` are disabled by default.
+/// Parse Procfile lines into (name, cmd) pairs.
+/// If `names` is non-empty, only processes matching those names are returned.
+/// Lines starting with `#` are comments.
 pub fn parse<'a>(
   input: &'a str,
-  exclude: &[String],
-  include: &[String],
+  names: &[String],
 ) -> Result<Vec<(&'a str, &'a str)>, String> {
   let mut result = Vec::new();
   let mut errors = Vec::new();
@@ -36,16 +35,7 @@ pub fn parse<'a>(
           continue;
         }
 
-        let (name, disabled) = match name.strip_prefix(DISABLED_PREFIX) {
-          Some(stripped) => (stripped, true),
-          None => (name, false),
-        };
-
-        if disabled && !include.iter().any(|i| i == name) {
-          continue;
-        }
-
-        if exclude.iter().any(|e| e == name) {
+        if !names.is_empty() && !names.iter().any(|f| f == name) {
           continue;
         }
 
@@ -73,10 +63,16 @@ mod tests {
 
   #[test]
   fn parse_accepts_indented_comments() {
-    let exclude = Vec::<String>::new();
-    let include = Vec::<String>::new();
     let input = "  # comment\nweb: echo hi\n";
-    let parsed = parse(input, &exclude, &include).unwrap();
+    let parsed = parse(input, &[]).unwrap();
     assert_eq!(parsed, vec![("web", "echo hi")]);
+  }
+
+  #[test]
+  fn parse_filters_by_names() {
+    let input = "web: echo web\napi: echo api\nworker: echo worker\n";
+    let names = vec!["web".to_string(), "worker".to_string()];
+    let parsed = parse(input, &names).unwrap();
+    assert_eq!(parsed, vec![("web", "echo web"), ("worker", "echo worker")]);
   }
 }

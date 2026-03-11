@@ -1,7 +1,6 @@
 use super::ansi;
 use super::color::color_for_index;
 use super::process::Process;
-use super::procfile;
 use super::LogEvent;
 use clap::ValueEnum;
 use nix::sys::signal::Signal;
@@ -19,21 +18,21 @@ use tokio::time::sleep;
 const SIGKILL_GRACE_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, ValueEnum)]
-pub enum RunningMode {
+pub enum OnExit {
   /// Restart a process when it exits
   Restart,
   /// Stop all processes when any one exits
-  Exit,
+  Stop,
   /// Ignore process exits, quit when all are done
-  Relax,
+  Ignore,
 }
 
-impl Display for RunningMode {
+impl Display for OnExit {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      RunningMode::Restart => write!(f, "Restart"),
-      RunningMode::Exit => write!(f, "Exit"),
-      RunningMode::Relax => write!(f, "Relax"),
+      OnExit::Restart => write!(f, "Restart"),
+      OnExit::Stop => write!(f, "Stop"),
+      OnExit::Ignore => write!(f, "Ignore"),
     }
   }
 }
@@ -57,8 +56,8 @@ enum Event {
 /// Lifecycle: `from_string()` parses the Procfile and builds the manager,
 /// then `start()` spawns everything and blocks until all processes are done.
 pub struct ProcessManager {
-  /// Current running mode (may switch to Relax during shutdown).
-  mode: RunningMode,
+  /// Current on-exit behavior (may switch to Ignore during shutdown).
+  mode: OnExit,
   /// Longest process name length, used by stdout to align log prefixes.
   name_width: usize,
   /// Active processes keyed by their index from the Procfile.
@@ -76,24 +75,20 @@ pub struct ProcessManager {
 }
 
 impl ProcessManager {
-  /// Parse a Procfile string and build a manager. Does not start processes yet.
-  pub fn from_string(
-    input: &str,
-    mode: RunningMode,
-    exclude: &[String],
-    include: &[String],
+  /// Build a manager from a list of (name, command) pairs. Does not start processes yet.
+  pub fn new(
+    entries: &[(&str, &str)],
+    mode: OnExit,
     log_tx: broadcast::Sender<LogEvent>,
   ) -> Result<Self, String> {
-    let parsed = procfile::parse(input, exclude, include)?;
-
-    if parsed.is_empty() {
-      return Err("No processes selected after applying include/exclude filters".to_string());
+    if entries.is_empty() {
+      return Err("No processes to run".to_string());
     }
 
-    let name_width = parsed.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+    let name_width = entries.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
     let (tx, rx) = mpsc::unbounded_channel();
 
-    let processes: HashMap<usize, Process> = parsed
+    let processes: HashMap<usize, Process> = entries
       .iter()
       .enumerate()
       .map(|(i, (name, cmd))| (i, Process::new(name, cmd, color_for_index(i))))
@@ -275,7 +270,7 @@ impl ProcessManager {
     };
 
     match self.mode {
-      RunningMode::Restart => {
+      OnExit::Restart => {
         if let Some(proc) = self.processes.get(&id) {
           self.emit_system(proc, &exit_message);
         }
@@ -295,7 +290,7 @@ impl ProcessManager {
           Self::spawn_restart(id, delay, self.tx.clone());
         }
       }
-      RunningMode::Exit => {
+      OnExit::Stop => {
         if !exit_success {
           self.failed = true;
         }
@@ -307,7 +302,7 @@ impl ProcessManager {
         self.processes.remove(&id);
         self.stop();
       }
-      RunningMode::Relax => {
+      OnExit::Ignore => {
         // Don't count failures caused by our own shutdown signals.
         if !exit_success && !self.shutting_down {
           self.failed = true;
@@ -330,7 +325,7 @@ impl ProcessManager {
 
   /// Called when a restart timer fires. Starts the process again (or drops it on failure).
   fn handle_restart(&mut self, id: usize) {
-    if self.mode != RunningMode::Restart || self.shutting_down {
+    if self.mode != OnExit::Restart || self.shutting_down {
       self.processes.remove(&id);
       return;
     }
@@ -370,7 +365,7 @@ impl ProcessManager {
     }
 
     self.shutting_down = true;
-    self.mode = RunningMode::Relax;
+    self.mode = OnExit::Ignore;
     self.processes.retain(|_, process| process.is_running());
     self.signal_all(Signal::SIGINT, "Stopping...");
     Self::spawn_force_kill(self.tx.clone());
@@ -425,17 +420,13 @@ mod tests {
   use super::*;
 
   #[test]
-  fn from_string_fails_if_no_processes_selected() {
-    let exclude = vec!["web".to_string()];
-    let include = Vec::<String>::new();
-    let input = "web: echo hi\n";
-
+  fn new_fails_if_no_processes() {
     let (log_tx, _) = broadcast::channel(16);
-    let manager = ProcessManager::from_string(input, RunningMode::Exit, &exclude, &include, log_tx);
+    let manager = ProcessManager::new(&[], OnExit::Stop, log_tx);
 
     match manager {
       Ok(_) => panic!("expected no-processes error"),
-      Err(err) => assert!(err.contains("No processes selected")),
+      Err(err) => assert!(err.contains("No processes")),
     }
   }
 }
