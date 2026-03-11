@@ -340,6 +340,7 @@ async fn cmd_start(start: StartArgs) -> ExitCode {
 
   let code = manager.start().await;
   drop(manager);
+  drop(log_tx);
 
   if let Some(handle) = stdout_handle {
     let _ = handle.await;
