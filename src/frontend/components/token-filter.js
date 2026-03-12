@@ -4,6 +4,7 @@
 import { ui } from "../main.js";
 import { sendFilter } from "./search.js";
 import { renderAllLogs } from "./virtual-scroll.js";
+import { pushHistory } from "./history.js";
 import {
   tokenFilterBar,
   tokenFilterTags,
@@ -11,7 +12,7 @@ import {
   logViewport,
 } from "../lib/dom.js";
 
-function renderTokenBar() {
+export function renderTokenBar() {
   const hasTokens = ui.activeTokens.size > 0;
   tokenFilterBar.classList.toggle("hidden", !hasTokens);
 
@@ -51,6 +52,7 @@ function toggleToken(token) {
   renderTokenBar();
   sendFilter();
   renderAllLogs();
+  pushHistory();
 }
 
 export function initTokenFilter() {
@@ -69,5 +71,6 @@ export function initTokenFilter() {
     renderTokenBar();
     sendFilter();
     renderAllLogs();
+    pushHistory();
   });
 }

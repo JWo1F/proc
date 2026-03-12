@@ -8,6 +8,7 @@ import {
 } from "../lib/dom.js";
 import { renderAllLogs } from "./virtual-scroll.js";
 import { sendFilter } from "./search.js";
+import { pushHistory } from "./history.js";
 
 function closeAllDropdowns() {
   processFilterDropdown.classList.add("hidden");
@@ -57,6 +58,7 @@ function rebuildProcessFilter() {
       sendFilter();
       rebuildProcessFilter();
       renderAllLogs();
+      pushHistory();
     });
 
     processFilterDropdown.appendChild(btn);

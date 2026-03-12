@@ -13,6 +13,7 @@ import {
 import { renderAllLogs } from "./virtual-scroll.js";
 import { rebuildProcessFilter } from "./process-filter.js";
 import { rebuildLevelFilter } from "./level-filter.js";
+import { pushHistory } from "./history.js";
 
 const TOGGLE_ACTIVE =
   "px-2 h-full text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 hover:bg-blue-200 dark:hover:bg-blue-800/50 transition-colors leading-none";
@@ -24,7 +25,7 @@ function updateToggleBtn(btn, active, extraClass) {
     (active ? TOGGLE_ACTIVE : TOGGLE_INACTIVE) + (extraClass || "");
 }
 
-function updateSearchToggles() {
+export function updateSearchToggles() {
   updateToggleBtn(searchCaseBtn, ui.searchCaseSensitive);
   updateToggleBtn(
     searchWordBtn,
@@ -78,6 +79,7 @@ function applySearch() {
   validateRegex();
   sendFilter();
   renderAllLogs();
+  pushHistory();
 }
 
 // Clear all filters (search, processes, levels, tokens) and notify worker
@@ -99,6 +101,7 @@ export function clearAllFilters() {
   rebuildProcessFilter();
   rebuildLevelFilter();
   sendFilter();
+  pushHistory();
 }
 
 // Exported so process-filter can also trigger filter updates
@@ -120,6 +123,7 @@ export function initSearch() {
     searchBar.classList.remove("!border-red-400", "dark:!border-red-500");
     sendFilter();
     renderAllLogs();
+    pushHistory();
   });
 
   searchCaseBtn.addEventListener("click", () => {

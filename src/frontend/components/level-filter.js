@@ -3,6 +3,7 @@ import { levelFilterBtn, levelFilterDropdown } from "../lib/dom.js";
 import { renderAllLogs } from "./virtual-scroll.js";
 import { sendFilter } from "./search.js";
 import { closeAllDropdowns, setupDropdown } from "./process-filter.js";
+import { pushHistory } from "./history.js";
 
 const LEVELS = [
   { key: "debug", label: "Debug", color: "#9ca3af" },
@@ -46,6 +47,7 @@ export function rebuildLevelFilter() {
       sendFilter();
       rebuildLevelFilter();
       renderAllLogs();
+      pushHistory();
     });
 
     levelFilterDropdown.appendChild(btn);

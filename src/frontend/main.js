@@ -8,6 +8,7 @@ import { initLevelFilter } from "./components/level-filter.js";
 import { initDownloads } from "./components/downloads.js";
 import { initVirtualScroll } from "./components/virtual-scroll.js";
 import { initTokenFilter } from "./components/token-filter.js";
+import { initHistory } from "./components/history.js";
 
 // ── Shared UI state ────────────────────────────────────────────────────
 
@@ -65,3 +66,4 @@ initLevelFilter();
 initDownloads();
 initTokenFilter();
 initVirtualScroll();
+initHistory();
