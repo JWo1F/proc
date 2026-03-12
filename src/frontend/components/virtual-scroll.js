@@ -228,7 +228,8 @@ function render() {
   }
   lastRenderKey = renderKey;
 
-  // Render cached items
+  // Render cached items — preserve horizontal scroll across DOM rebuilds.
+  const savedScrollLeft = logContainer.scrollLeft;
   const frag = document.createDocumentFragment();
   let hasExpanded = false;
   for (const item of items) {
@@ -242,6 +243,7 @@ function render() {
   }
   contentEl.innerHTML = "";
   contentEl.appendChild(frag);
+  logContainer.scrollLeft = savedScrollLeft;
 
   // measureAll: after expand/collapse click, measure all visible elements so
   // the virtualizer picks up both new expanded heights and collapsed-back-to-default.
