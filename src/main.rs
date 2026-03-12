@@ -340,6 +340,19 @@ async fn cmd_start(start: StartArgs) -> ExitCode {
 
   let code = manager.start().await;
   drop(manager);
+
+  #[cfg(feature = "web")]
+  if start.web.is_some() {
+    // Keep the web UI alive until Ctrl+C.
+    drop(log_tx);
+    if let Some(handle) = stdout_handle {
+      let _ = handle.await;
+    }
+    eprintln!("Web UI still running. Press Ctrl+C to quit.");
+    let _ = tokio::signal::ctrl_c().await;
+    return code.into();
+  }
+
   drop(log_tx);
 
   if let Some(handle) = stdout_handle {

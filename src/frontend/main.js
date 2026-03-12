@@ -9,6 +9,7 @@ import { initDownloads } from "./components/downloads.js";
 import { initVirtualScroll } from "./components/virtual-scroll.js";
 import { initTokenFilter } from "./components/token-filter.js";
 import { initHistory } from "./components/history.js";
+import { initLogsVolume } from "./components/logs-volume.js";
 
 // ── Shared UI state ────────────────────────────────────────────────────
 
@@ -65,5 +66,6 @@ initProcessFilter();
 initLevelFilter();
 initDownloads();
 initTokenFilter();
+initLogsVolume();
 initVirtualScroll();
 initHistory();

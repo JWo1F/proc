@@ -345,6 +345,39 @@
       </button>
     </div>
 
+    <!-- Logs Volume -->
+    <div
+      id="logs-volume-panel"
+      class="flex-none border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 relative hidden"
+    >
+      <div
+        id="logs-volume-header"
+        class="flex items-center gap-1.5 px-4 py-1 cursor-pointer select-none group"
+      >
+        <svg
+          id="logs-volume-chevron"
+          class="w-3 h-3 text-gray-400 dark:text-gray-500 transition-transform rotate-90"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M9 5l7 7-7 7"
+          />
+        </svg>
+        <span
+          class="text-xs font-medium text-gray-400 dark:text-gray-500 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors"
+          >Logs volume</span
+        >
+      </div>
+      <div id="logs-volume-chart" class="px-4 pb-2" style="height: 72px">
+        <div id="logs-volume-bars" class="h-full"></div>
+      </div>
+    </div>
+
     <!-- Log container -->
     <div
       id="log-container"
