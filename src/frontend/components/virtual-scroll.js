@@ -3,7 +3,6 @@
 
 import {
   Virtualizer,
-  elementScroll,
   observeElementOffset,
   observeElementRect,
 } from "@tanstack/virtual-core";
@@ -228,8 +227,7 @@ function render() {
   }
   lastRenderKey = renderKey;
 
-  // Render cached items — preserve horizontal scroll across DOM rebuilds.
-  const savedScrollLeft = logContainer.scrollLeft;
+  // Render cached items
   const frag = document.createDocumentFragment();
   let hasExpanded = false;
   for (const item of items) {
@@ -241,9 +239,16 @@ function render() {
     frag.appendChild(el);
     if (expandedLines.has(entry.index)) hasExpanded = true;
   }
+
+  // If no cached entries matched (all cache misses), keep old content
+  // visible until the worker responds with the batch.
+  if (frag.childNodes.length === 0) {
+    lastRenderKey = "";
+    return;
+  }
+
   contentEl.innerHTML = "";
   contentEl.appendChild(frag);
-  logContainer.scrollLeft = savedScrollLeft;
 
   // measureAll: after expand/collapse click, measure all visible elements so
   // the virtualizer picks up both new expanded heights and collapsed-back-to-default.
@@ -314,7 +319,11 @@ export function initVirtualScroll() {
     overscan: OVERSCAN,
     observeElementRect,
     observeElementOffset,
-    scrollToFn: elementScroll,
+    scrollToFn: (offset, { adjustments = 0, behavior }, instance) => {
+      const el = instance.scrollElement;
+      if (!el) return;
+      el.scrollTo({ top: offset + adjustments, left: el.scrollLeft, behavior });
+    },
     onChange: () => scheduleRender(),
   };
   virtualizer = new Virtualizer(baseOpts);
