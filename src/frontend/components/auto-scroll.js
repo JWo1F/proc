@@ -12,6 +12,14 @@ export function updateAutoScrollBtn() {
   }
 }
 
+/** Sync autoScroll flag with actual scroll position, then update button. */
+export function syncAutoScroll() {
+  const { scrollTop, scrollHeight, clientHeight } = logContainer;
+  const atBottom = scrollHeight - scrollTop - clientHeight <= 40;
+  ui.autoScroll = atBottom;
+  updateAutoScrollBtn();
+}
+
 export function initAutoScroll() {
   let scrollDebounce = null;
   let programmaticScroll = false;

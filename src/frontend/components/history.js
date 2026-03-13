@@ -15,7 +15,7 @@ import {
   searchError,
 } from "../lib/dom.js";
 import { sendFilter, updateSearchToggles } from "./search.js";
-import { renderAllLogs } from "./virtual-scroll.js";
+import { renderAllLogs, scheduleScrollRestore } from "./virtual-scroll.js";
 import { rebuildProcessFilter } from "./process-filter.js";
 import { rebuildLevelFilter } from "./level-filter.js";
 import { renderTokenBar } from "./token-filter.js";
@@ -65,7 +65,6 @@ function saveScroll() {
 
 function applyState(state) {
   restoring = true;
-  saveScroll();
 
   ui.searchQuery = state.searchQuery;
   ui.searchCaseSensitive = state.searchCaseSensitive;
@@ -86,15 +85,9 @@ function applyState(state) {
   renderTokenBar();
 
   sendFilter();
-  ui.autoScroll = false;
+  scheduleScrollRestore(state.scrollTop, state.scrollLeft);
   renderAllLogs();
-
-  // Restore scroll after render settles
-  requestAnimationFrame(() => {
-    logContainer.scrollLeft = state.scrollLeft;
-    logContainer.scrollTop = state.scrollTop;
-    restoring = false;
-  });
+  restoring = false;
 }
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -123,6 +116,7 @@ export function pushHistory() {
 /** Navigate back in history. */
 export function historyBack() {
   if (cursor <= 0) return;
+  saveScroll();
   cursor--;
   applyState(stack[cursor]);
 }
@@ -130,6 +124,7 @@ export function historyBack() {
 /** Navigate forward in history. */
 export function historyForward() {
   if (cursor >= stack.length - 1) return;
+  saveScroll();
   cursor++;
   applyState(stack[cursor]);
 }

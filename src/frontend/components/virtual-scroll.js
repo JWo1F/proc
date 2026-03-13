@@ -19,7 +19,7 @@ import {
   statIndexed,
   statDbSize,
 } from "../lib/dom.js";
-import { updateAutoScrollBtn } from "./auto-scroll.js";
+import { updateAutoScrollBtn, syncAutoScroll } from "./auto-scroll.js";
 import { clearAllFilters } from "./search.js";
 
 function fmtSize(bytes) {
@@ -45,6 +45,7 @@ const entryCache = new Map(); // filteredIndex → entry
 const expandedLines = new Set(); // raw log indices of expanded lines
 let lastFilterVersion = -1;
 let pendingKey = null;
+let pendingScrollRestore = null; // { scrollTop, scrollLeft } to apply after next filter update
 
 // ── DOM ───────────────────────────────────────────────────────────────
 
@@ -304,6 +305,10 @@ export function renderAllLogs() {
   scheduleRender();
 }
 
+export function scheduleScrollRestore(scrollTop, scrollLeft) {
+  pendingScrollRestore = { scrollTop, scrollLeft };
+}
+
 // Called by auto-scroll on scroll events
 export function renderVisible() {
   scheduleRender();
@@ -395,10 +400,18 @@ export function initVirtualScroll() {
     if (pendingScrollToRaw >= 0 && filterChanged) {
       ui.dbWorker.postMessage({ type: "findPosition", rawIndex: pendingScrollToRaw });
       pendingScrollToRaw = -1;
+    } else if (pendingScrollRestore && filterChanged) {
+      const restore = pendingScrollRestore;
+      pendingScrollRestore = null;
+      logContainer.scrollTop = restore.scrollTop;
+      logContainer.scrollLeft = restore.scrollLeft;
+      syncAutoScroll();
+      scheduleRender();
     } else if (ui.autoScroll) {
       scrollToBottom();
       scheduleRender();
     } else if (filterChanged) {
+      syncAutoScroll();
       scheduleRender();
     }
   });
