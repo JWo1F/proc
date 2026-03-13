@@ -10,25 +10,30 @@ let ftsSynced = 0;
 let ftsCount = 0;
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS processes (
+  id    INTEGER PRIMARY KEY,
+  name  TEXT NOT NULL,
+  color TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS entries (
-  idx     INTEGER PRIMARY KEY,
-  process TEXT NOT NULL,
-  color   TEXT NOT NULL,
-  raw     TEXT NOT NULL,
-  plain   TEXT NOT NULL,
-  level   TEXT,
-  system  INTEGER,
-  ts      REAL NOT NULL,
-  has_ms  INTEGER NOT NULL
+  idx        INTEGER PRIMARY KEY,
+  process_id INTEGER NOT NULL,
+  raw        TEXT NOT NULL,
+  plain      TEXT NOT NULL,
+  level      TEXT,
+  system     INTEGER,
+  ts         REAL NOT NULL,
+  has_ms     INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_ts      ON entries (ts, idx);
-CREATE INDEX IF NOT EXISTS idx_process ON entries (process);
+CREATE INDEX IF NOT EXISTS idx_proc_id ON entries (process_id);
 CREATE INDEX IF NOT EXISTS idx_level   ON entries (level);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
-  plain, process,
-  content=entries, content_rowid=idx,
+  plain, process_name,
+  content='',
   tokenize='trigram'
 );
 `;
@@ -63,9 +68,31 @@ export function clearAll() {
   if (!db) return;
   db.exec("DROP TABLE IF EXISTS entries_fts");
   db.exec("DROP TABLE IF EXISTS entries");
+  db.exec("DROP TABLE IF EXISTS processes");
   db.exec(SCHEMA);
   ftsSynced = 0;
   ftsCount = 0;
+}
+
+export function upsertProcesses(processes) {
+  if (!db || processes.length === 0) return;
+  db.exec("BEGIN");
+  try {
+    const stmt = db.prepare(
+      "INSERT OR REPLACE INTO processes (id, name, color) VALUES (?, ?, ?)"
+    );
+    try {
+      for (const p of processes) {
+        stmt.bind([p.id, p.name, p.color]).stepReset();
+      }
+    } finally {
+      stmt.finalize();
+    }
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 export function putBatch(entries) {
@@ -73,12 +100,12 @@ export function putBatch(entries) {
   db.exec("BEGIN");
   try {
     const stmt = db.prepare(
-      "INSERT OR REPLACE INTO entries (idx, process, color, raw, plain, level, system, ts, has_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT OR REPLACE INTO entries (idx, process_id, raw, plain, level, system, ts, has_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     );
     try {
       for (const e of entries) {
         stmt.bind([
-          e.index, e.process, e.color, e.raw, e.plain,
+          e.index, e.processId, e.raw, e.plain,
           e.level || null, e.system ? 1 : 0, e.ts, e.hasMs ? 1 : 0,
         ]).stepReset();
       }
@@ -96,16 +123,18 @@ export function putBatch(entries) {
 export function syncFTSChunk(limit) {
   if (!db) return 0;
   const rows = db.exec({
-    sql: "SELECT idx, plain, process FROM entries WHERE idx > ? ORDER BY idx LIMIT ?",
+    sql: `SELECT e.idx, e.plain, p.name
+          FROM entries e JOIN processes p ON e.process_id = p.id
+          WHERE e.idx > ? ORDER BY e.idx LIMIT ?`,
     bind: [ftsSynced, limit],
     returnValue: "resultRows",
   });
   if (rows.length === 0) return 0;
   db.exec("BEGIN");
   try {
-    const stmt = db.prepare("INSERT INTO entries_fts(rowid, plain, process) VALUES(?,?,?)");
+    const stmt = db.prepare("INSERT INTO entries_fts(rowid, plain, process_name) VALUES(?,?,?)");
     try {
-      for (const [idx, plain, process] of rows) stmt.bind([idx, plain, process]).stepReset();
+      for (const [idx, plain, name] of rows) stmt.bind([idx, plain, name]).stepReset();
     } finally {
       stmt.finalize();
     }
@@ -137,6 +166,9 @@ function rowToEntry(row) {
   };
 }
 
+const ENTRY_SELECT = `SELECT e.idx, p.name, p.color, e.raw, e.plain, e.level, e.system, e.ts, e.has_ms
+FROM entries e JOIN processes p ON e.process_id = p.id`;
+
 export function getByIndices(indices) {
   if (!db || indices.length === 0) return [];
   const lookup = new Map();
@@ -144,7 +176,7 @@ export function getByIndices(indices) {
   const results = new Array(indices.length);
   const placeholders = indices.map(() => "?").join(",");
   const rows = db.exec({
-    sql: `SELECT idx, process, color, raw, plain, level, system, ts, has_ms FROM entries WHERE idx IN (${placeholders})`,
+    sql: `${ENTRY_SELECT} WHERE e.idx IN (${placeholders})`,
     bind: indices,
     returnValue: "resultRows",
   });
@@ -158,7 +190,7 @@ export function getByIndices(indices) {
 export function getAllSorted() {
   if (!db) return [];
   const rows = db.exec({
-    sql: "SELECT idx, process, color, raw, plain, level, system, ts, has_ms FROM entries ORDER BY ts, idx",
+    sql: `${ENTRY_SELECT} ORDER BY e.ts, e.idx`,
     returnValue: "resultRows",
   });
   return rows.map(rowToEntry);
@@ -171,7 +203,7 @@ export function queryFilteredIndices(filter) {
 
   if (filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
     const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
-    conditions.push(`process NOT IN (${placeholders})`);
+    conditions.push(`p.name NOT IN (${placeholders})`);
     params.push(...filter.hiddenProcesses);
   }
 
@@ -180,11 +212,11 @@ export function queryFilteredIndices(filter) {
     const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
     if (nonNoneLevels.length > 0) {
       const placeholders = nonNoneLevels.map(() => "?").join(",");
-      levelConds.push(`level IN (${placeholders})`);
+      levelConds.push(`e.level IN (${placeholders})`);
       params.push(...nonNoneLevels);
     }
     if (filter.hiddenLevels.includes("none")) {
-      levelConds.push("level IS NULL");
+      levelConds.push("e.level IS NULL");
     }
     conditions.push(`NOT (${levelConds.join(" OR ")})`);
   }
@@ -193,24 +225,24 @@ export function queryFilteredIndices(filter) {
   if (filter.query) {
     // Escape double quotes in the query for FTS5
     const escaped = filter.query.replace(/"/g, '""');
-    conditions.push(`idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
+    conditions.push(`e.idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
     params.push(`"${escaped}"`);
   }
 
   // Token filtering via LIKE (tokens are already lowercased)
   if (filter.activeTokens && filter.activeTokens.length > 0) {
     for (const token of filter.activeTokens) {
-      conditions.push(`(LOWER(plain) LIKE ? OR LOWER(process) LIKE ?)`);
+      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
       const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
       params.push(pattern, pattern);
     }
   }
 
-  let sql = "SELECT idx FROM entries";
+  let sql = "SELECT e.idx FROM entries e JOIN processes p ON e.process_id = p.id";
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
   }
-  sql += " ORDER BY ts, idx";
+  sql += " ORDER BY e.ts, e.idx";
 
   const rows = db.exec({ sql, bind: params, returnValue: "resultRows" });
   return rows.map((r) => r[0]);
@@ -232,10 +264,10 @@ export function getDBSize() {
 export function getProcesses() {
   if (!db) return [];
   const rows = db.exec({
-    sql: "SELECT process, color FROM entries GROUP BY process ORDER BY MIN(idx)",
+    sql: "SELECT p.name, p.color FROM processes p ORDER BY p.id",
     returnValue: "resultRows",
   });
-  return rows; // [[process, color], ...]
+  return rows; // [[name, color], ...]
 }
 
 export function computeVolume(filter) {
@@ -244,11 +276,13 @@ export function computeVolume(filter) {
   // Build WHERE clause from filter
   const conditions = [];
   const params = [];
+  let needsJoin = false;
 
   if (filter && filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
     const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
-    conditions.push(`process NOT IN (${placeholders})`);
+    conditions.push(`p.name NOT IN (${placeholders})`);
     params.push(...filter.hiddenProcesses);
+    needsJoin = true;
   }
 
   if (filter && filter.hiddenLevels && filter.hiddenLevels.length > 0) {
@@ -256,29 +290,31 @@ export function computeVolume(filter) {
     const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
     if (nonNoneLevels.length > 0) {
       const placeholders = nonNoneLevels.map(() => "?").join(",");
-      levelConds.push(`level IN (${placeholders})`);
+      levelConds.push(`e.level IN (${placeholders})`);
       params.push(...nonNoneLevels);
     }
     if (filter.hiddenLevels.includes("none")) {
-      levelConds.push("level IS NULL");
+      levelConds.push("e.level IS NULL");
     }
     conditions.push(`NOT (${levelConds.join(" OR ")})`);
   }
 
   if (filter && filter.query) {
     const escaped = filter.query.replace(/"/g, '""');
-    conditions.push(`idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
+    conditions.push(`e.idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
     params.push(`"${escaped}"`);
   }
 
   if (filter && filter.activeTokens && filter.activeTokens.length > 0) {
     for (const token of filter.activeTokens) {
-      conditions.push(`(LOWER(plain) LIKE ? OR LOWER(process) LIKE ?)`);
+      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
       const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
       params.push(pattern, pattern);
+      needsJoin = true;
     }
   }
 
+  const join = needsJoin ? " JOIN processes p ON e.process_id = p.id" : "";
   const where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
 
   // Time range always from all entries so bucket layout is stable
@@ -302,13 +338,13 @@ export function computeVolume(filter) {
   const grouped = db.exec({
     sql: `SELECT
             CASE
-              WHEN CAST((ts - ?) / ? AS INTEGER) >= ?
+              WHEN CAST((e.ts - ?) / ? AS INTEGER) >= ?
               THEN ? - 1
-              ELSE CAST((ts - ?) / ? AS INTEGER)
+              ELSE CAST((e.ts - ?) / ? AS INTEGER)
             END AS bucket,
-            COALESCE(level, 'none') AS lvl,
+            COALESCE(e.level, 'none') AS lvl,
             COUNT(*) AS cnt
-          FROM entries${where}
+          FROM entries e${join}${where}
           GROUP BY bucket, lvl`,
     bind: [minTs, interval, bucketCount, bucketCount, minTs, interval, ...params],
     returnValue: "resultRows",
@@ -330,7 +366,7 @@ export function getFilteredEntries(filter) {
 
   if (filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
     const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
-    conditions.push(`process NOT IN (${placeholders})`);
+    conditions.push(`p.name NOT IN (${placeholders})`);
     params.push(...filter.hiddenProcesses);
   }
 
@@ -339,34 +375,34 @@ export function getFilteredEntries(filter) {
     const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
     if (nonNoneLevels.length > 0) {
       const placeholders = nonNoneLevels.map(() => "?").join(",");
-      levelConds.push(`level IN (${placeholders})`);
+      levelConds.push(`e.level IN (${placeholders})`);
       params.push(...nonNoneLevels);
     }
     if (filter.hiddenLevels.includes("none")) {
-      levelConds.push("level IS NULL");
+      levelConds.push("e.level IS NULL");
     }
     conditions.push(`NOT (${levelConds.join(" OR ")})`);
   }
 
   if (filter.query) {
     const escaped = filter.query.replace(/"/g, '""');
-    conditions.push(`idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
+    conditions.push(`e.idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
     params.push(`"${escaped}"`);
   }
 
   if (filter.activeTokens && filter.activeTokens.length > 0) {
     for (const token of filter.activeTokens) {
-      conditions.push(`(LOWER(plain) LIKE ? OR LOWER(process) LIKE ?)`);
+      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
       const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
       params.push(pattern, pattern);
     }
   }
 
-  let sql = "SELECT idx, process, color, raw, plain, level, system, ts, has_ms FROM entries";
+  let sql = `${ENTRY_SELECT}`;
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
   }
-  sql += " ORDER BY ts, idx";
+  sql += " ORDER BY e.ts, e.idx";
 
   const rows = db.exec({ sql, bind: params, returnValue: "resultRows" });
   return rows.map(rowToEntry);

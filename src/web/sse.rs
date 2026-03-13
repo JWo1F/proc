@@ -17,9 +17,8 @@ fn dir_name() -> String {
 
 fn entry_to_sse(entry: &LogEntry) -> Result<Event, Infallible> {
   let data = format!(
-    "{{\"process\":{},\"color\":{},\"ts\":{},\"sys\":{},\"line\":{}}}",
-    json_str(&entry.process),
-    json_str(&entry.color),
+    "{{\"pid\":{},\"ts\":{},\"sys\":{},\"line\":{}}}",
+    entry.process_id,
     entry.timestamp,
     entry.system,
     json_str(&entry.line),
@@ -72,11 +71,31 @@ pub(super) async fn handler(
 
   // Init event (only on fresh connections, not reconnects)
   let init_events: Vec<Result<Event, Infallible>> = if last_id.is_none() {
+    // Build processes JSON array
+    let processes = store.get_processes();
+    let procs_json: Vec<String> = processes
+      .iter()
+      .map(|p| {
+        format!(
+          "{{\"id\":{},\"name\":{},\"color\":{}}}",
+          p.id,
+          json_str(&p.name),
+          json_str(&p.color),
+        )
+      })
+      .collect();
+
+    let data = format!(
+      "{{\"name\":{},\"processes\":[{}]}}",
+      json_str(&dir_name()),
+      procs_json.join(","),
+    );
+
     vec![Ok(
       Event::default()
         .event("init")
         .retry(std::time::Duration::from_millis(SSE_RETRY_MS))
-        .data(format!("{{\"name\":{}}}", json_str(&dir_name()))),
+        .data(data),
     )]
   } else {
     vec![]

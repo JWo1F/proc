@@ -6,13 +6,17 @@ import {
   initDB, clearAll, putBatch as dbPutBatch, getByIndices, getAllSorted,
   queryFilteredIndices, getFilteredEntries,
   getEntryCount, getProcesses, computeVolume, getDBSize,
-  syncFTSChunk, getFTSCount,
+  syncFTSChunk, getFTSCount, upsertProcesses,
 } from "./lib/sqlite.js";
 import { ansiToHtml } from "./lib/ansi.js";
 import { linkifyHtml } from "./lib/linkify.js";
 import { tokenifyHtml } from "./lib/tokens.js";
 
 const FTS_CHUNK = 500;
+
+// ── Process lookup (pid → {name, color}) ─────────────────────────────
+
+const processTable = new Map(); // id → { name, color }
 
 // ── Insert queue ────────────────────────────────────────────────────
 
@@ -95,9 +99,24 @@ function buildRegex() {
   }
 }
 
-function matchesEntry(process, plain) {
+function processNameForEntry(entry) {
+  // entry from inline filter has processId; rendered entries have process
+  if (entry.process !== undefined) return entry.process;
+  const info = processTable.get(entry.processId);
+  return info ? info.name : "";
+}
+
+function matchesEntry(processIdOrName, plain) {
+  let processName;
+  if (typeof processIdOrName === "number") {
+    const info = processTable.get(processIdOrName);
+    processName = info ? info.name : "";
+  } else {
+    processName = processIdOrName;
+  }
+
   const hidden = filter.hiddenProcesses;
-  if (hidden.length > 0 && hidden.includes(process)) return false;
+  if (hidden.length > 0 && hidden.includes(processName)) return false;
   const tokens = filter.activeTokens;
   if (tokens.length > 0) {
     const lower = plain.toLowerCase();
@@ -109,7 +128,7 @@ function matchesEntry(process, plain) {
   compiledRegex.lastIndex = 0;
   if (compiledRegex.test(plain)) return true;
   compiledRegex.lastIndex = 0;
-  if (compiledRegex.test(process)) return true;
+  if (compiledRegex.test(processName)) return true;
   return false;
 }
 
@@ -122,10 +141,11 @@ function matchesText(entry) {
     }
   }
   if (!compiledRegex) return true;
+  const processName = processNameForEntry(entry);
   compiledRegex.lastIndex = 0;
   if (compiledRegex.test(entry.plain)) return true;
   compiledRegex.lastIndex = 0;
-  if (compiledRegex.test(entry.process)) return true;
+  if (compiledRegex.test(processName)) return true;
   return false;
 }
 
@@ -241,7 +261,7 @@ function runLoop() {
 
     // Inline filter matching for new entries
     for (const entry of batch) {
-      if (matchesEntry(entry.process, entry.plain)) {
+      if (matchesEntry(entry.processId, entry.plain)) {
         filteredIndices.push(entry.index);
       }
     }
@@ -267,7 +287,7 @@ function runLoop() {
   loopRunning = false;
 }
 
-// ── Ingest worker port (receives putBatch) ──────────────────────────
+// ── Ingest worker port (receives putBatch + setProcesses) ────────────
 
 let ingestPort = null;
 
@@ -276,6 +296,11 @@ function handleIngestMessage(e) {
   if (msg.type === "putBatch") {
     insertQueue.push(msg.entries);
     kickLoop();
+  } else if (msg.type === "setProcesses") {
+    for (const p of msg.processes) {
+      processTable.set(p.id, { name: p.name, color: p.color });
+    }
+    upsertProcesses(msg.processes);
   }
 }
 

@@ -41,7 +41,8 @@ async fn log_consumer(mut rx: broadcast::Receiver<LogEvent>, store: Arc<LogStore
         let now = chrono::Utc::now();
         let ts = now.timestamp() as f64 + now.timestamp_subsec_millis() as f64 / 1000.0;
         let css_color = color_to_css(&event.color);
-        store.push(&event.process, &css_color, &event.line, ts, event.system);
+        let pid = store.register_process(&event.process, &css_color);
+        store.push(pid, &event.line, ts, event.system);
       }
       Err(broadcast::error::RecvError::Closed) => break,
       Err(broadcast::error::RecvError::Lagged(_)) => {}

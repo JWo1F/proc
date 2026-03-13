@@ -84,6 +84,11 @@ function connect() {
     try {
       const info = JSON.parse(e.data);
       self.postMessage({ type: "init", name: info.name || "procfile" });
+      // Forward process table to db worker
+      if (info.processes && info.processes.length > 0) {
+        dbPort.postMessage({ type: "setProcesses", processes: info.processes });
+        self.postMessage({ type: "processes", processes: info.processes });
+      }
     } catch {}
   });
 
@@ -121,8 +126,7 @@ function connect() {
 
       scheduleWrite({
         index,
-        process: raw.process,
-        color: raw.color,
+        processId: raw.pid ?? 0,
         raw: rawLine,
         plain,
         level,
