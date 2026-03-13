@@ -31,60 +31,47 @@ const LEVEL_LETTERS = {
 const ROW_HEIGHT = 24;
 const OVERSCAN = 50;
 
-// ── Cache ─────────────────────────────────────────────────────────────
+// ── State ──────────────────────────────────────────────────────────────
 
 export const entryCache = new Map(); // filteredIndex → entry
 export const expandedLines = new Set(); // raw log indices of expanded lines
+
 let lastFilterVersion = -1;
 let pendingKey = null;
 let pendingScrollRestore = null;
-
-// ── DOM ───────────────────────────────────────────────────────────────
+let selectedRawIndex = -1;
+let pendingScrollToRaw = -1;
 
 let contentEl = null;
 let virtualizer = null;
 let baseOpts = null;
-let rendering = false;
-let needsRerender = false;
 let renderScheduled = false;
-let measureAll = false;
-let lastRenderKey = "";
-let selectedRawIndex = -1;
-let pendingScrollToRaw = -1;
+let measuring = false;
+let contentDirty = false;
 
-// DOM element pool keyed by data-index — reused across renders
-const elPool = new Map(); // filteredIndex → DOM element
+// Keyed pool: filteredIndex → DOM element.
+// Elements stay in the DOM across renders; only their transform updates
+// on scroll. Created when entering the visible range, removed on exit.
+const pool = new Map();
 
 // ── Expand/collapse toggle ────────────────────────────────────────────
 
 export function toggleExpand(rawIndex) {
-  if (expandedLines.has(rawIndex)) {
-    expandedLines.delete(rawIndex);
-  } else {
-    expandedLines.add(rawIndex);
-  }
+  if (expandedLines.has(rawIndex)) expandedLines.delete(rawIndex);
+  else expandedLines.add(rawIndex);
   ui.autoScroll = false;
   updateAutoScrollBtn();
-  measureAll = true;
-  lastRenderKey = "";
+  contentDirty = true;
   render();
 }
 
-// ── Log element factory ───────────────────────────────────────────────
-
-function createLogElement(entry, sortedPos) {
-  const div = document.createElement("div");
-  div.className = buildRowClass(entry);
-  div.innerHTML = buildRowHTML(entry, sortedPos);
-  return div;
-}
+// ── HTML builders ─────────────────────────────────────────────────────
 
 function buildRowClass(entry) {
   let cls =
     "log-line flex items-start gap-3 px-2 py-0.5 rounded font-mono text-[13px] leading-relaxed";
   if (entry.level) cls += ` level-${entry.level}`;
-  const expanded = expandedLines.has(entry.index);
-  if (expanded) cls += " expanded";
+  if (expandedLines.has(entry.index)) cls += " expanded";
   if (entry.index === selectedRawIndex) cls += " log-line-selected";
   return cls;
 }
@@ -104,12 +91,16 @@ function buildRowHTML(entry, sortedPos) {
   );
 }
 
-function updateElement(el, entry, sortedPos) {
+function createEl(entry, sortedPos) {
+  const el = document.createElement("div");
   el.className = buildRowClass(entry);
   el.innerHTML = buildRowHTML(entry, sortedPos);
+  el.setAttribute("data-index", sortedPos);
+  el.style.cssText = "position:absolute;top:0;left:0;min-width:100%";
+  return el;
 }
 
-// ── Event delegation ─────────────────────────────────────────────────
+// ── Event delegation ──────────────────────────────────────────────────
 
 function initDelegation() {
   contentEl.addEventListener("click", (e) => {
@@ -130,7 +121,7 @@ function initDelegation() {
       if (!entry) return;
       if (selectedRawIndex === entry.index) {
         selectedRawIndex = -1;
-        lastRenderKey = "";
+        contentDirty = true;
         render();
         return;
       }
@@ -150,7 +141,7 @@ function entryForRow(row) {
   return entryCache.get(idx) || null;
 }
 
-// ── Counts ────────────────────────────────────────────────────────────
+// ── Counts ─────────────────────────────────────────────────────────────
 
 function updateCounts() {
   logCountEl.textContent = `stored: ${ui.totalLogs.toLocaleString()}`;
@@ -167,40 +158,9 @@ function updateCounts() {
   }
 }
 
-// ── Render ─────────────────────────────────────────────────────────────
+// ── Cache miss → worker request ────────────────────────────────────────
 
-function scheduleRender() {
-  if (renderScheduled) return;
-  renderScheduled = true;
-  requestAnimationFrame(() => {
-    renderScheduled = false;
-    render();
-  });
-}
-
-function render() {
-  if (rendering) {
-    needsRerender = true;
-    return;
-  }
-
-  if (!virtualizer || ui.filteredLogs === 0) {
-    if (contentEl) {
-      contentEl.innerHTML = "";
-      elPool.clear();
-    }
-    return;
-  }
-
-  virtualizer._willUpdate();
-  const items = virtualizer.getVirtualItems();
-  if (items.length === 0) {
-    contentEl.innerHTML = "";
-    elPool.clear();
-    return;
-  }
-
-  // Request missing entries from worker
+function requestMissing(items) {
   let missStart = -1;
   let missEnd = -1;
   for (const item of items) {
@@ -209,7 +169,6 @@ function render() {
       missEnd = item.index + 1;
     }
   }
-
   if (missStart !== -1) {
     const key = `${missStart}:${missEnd}`;
     if (key !== pendingKey) {
@@ -222,89 +181,97 @@ function render() {
       });
     }
   }
+}
 
-  // Content key: which items, cache state, expand state, selection.
-  // Excludes positions — those are updated in the fast path.
-  let contentKey = `sel:${selectedRawIndex};`;
-  for (const item of items) {
-    const entry = entryCache.get(item.index);
-    const exp = entry && expandedLines.has(entry.index) ? 1 : 0;
-    contentKey += `${item.index}:${entry ? 1 : 0}:${exp},`;
+// ── Pool helpers ───────────────────────────────────────────────────────
+
+function clearPool() {
+  for (const el of pool.values()) el.remove();
+  pool.clear();
+}
+
+// ── Render ──────────────────────────────────────────────────────────────
+
+function scheduleRender() {
+  if (renderScheduled || measuring) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    render();
+  });
+}
+
+function render() {
+  if (!virtualizer || ui.filteredLogs === 0) {
+    clearPool();
+    return;
   }
 
-  const contentChanged = contentKey !== lastRenderKey || measureAll;
+  virtualizer._willUpdate();
+  const items = virtualizer.getVirtualItems();
+  if (items.length === 0) {
+    clearPool();
+    return;
+  }
 
-  if (contentChanged) {
-    lastRenderKey = contentKey;
+  requestMissing(items);
 
-    // Determine which items are visible and have cached entries
-    const visibleSet = new Set();
-    let hasExpanded = false;
+  let cached = 0;
+  let needsMeasure = false;
 
-    for (const item of items) {
-      const entry = entryCache.get(item.index);
-      if (!entry) continue;
-      visibleSet.add(item.index);
+  for (const item of items) {
+    const entry = entryCache.get(item.index);
+    if (!entry) continue;
+    cached++;
 
-      let el = elPool.get(item.index);
-      if (el) {
-        // Reuse — update content only if needed (expand/select state could change)
-        updateElement(el, entry, item.index);
-      } else {
-        el = createLogElement(entry, item.index);
-        el.setAttribute("data-index", item.index);
-        elPool.set(item.index, el);
+    let el = pool.get(item.index);
+    if (el) {
+      if (contentDirty) {
+        el.className = buildRowClass(entry);
+        el.innerHTML = buildRowHTML(entry, item.index);
       }
-      el.style.cssText = `position:absolute;top:0;left:0;min-width:100%;transform:translateY(${item.start}px)`;
-      if (expandedLines.has(entry.index)) hasExpanded = true;
+    } else {
+      el = createEl(entry, item.index);
+      pool.set(item.index, el);
+      contentEl.appendChild(el);
     }
 
-    // Remove elements no longer visible
-    for (const [idx, el] of elPool) {
-      if (!visibleSet.has(idx)) {
-        el.remove();
-        elPool.delete(idx);
-      }
-    }
+    el.style.transform = `translateY(${item.start}px)`;
+    if (expandedLines.has(entry.index)) needsMeasure = true;
+  }
+  contentDirty = false;
 
-    // Append new elements not yet in DOM
-    for (const idx of visibleSet) {
-      const el = elPool.get(idx);
-      if (el && !el.parentNode) {
-        contentEl.appendChild(el);
-      }
-    }
+  // Nothing cached yet — keep old pool elements as placeholders so the
+  // viewport doesn't go blank while waiting for the worker batch.
+  if (cached === 0) return;
 
-    if (visibleSet.size === 0) {
-      lastRenderKey = "";
-      return;
+  // Remove pool elements outside the virtual range. Elements inside the
+  // range whose cache entry hasn't arrived yet are kept — they'll be
+  // replaced once the batch comes in.
+  const lo = items[0].index;
+  const hi = items[items.length - 1].index;
+  const savedLeft = logContainer.scrollLeft;
+  for (const [idx, el] of pool) {
+    if (idx < lo || idx > hi) {
+      el.remove();
+      pool.delete(idx);
     }
-
-    if (measureAll || hasExpanded) {
-      rendering = true;
-      for (const el of [...contentEl.children]) {
-        virtualizer.measureElement(el);
-      }
-      rendering = false;
-      measureAll = false;
-
-      logViewport.style.height = virtualizer.getTotalSize() + "px";
-
-      if (needsRerender) {
-        needsRerender = false;
-        render();
-      }
-      return;
-    }
-  } else {
-    // Fast path: only positions changed (scroll). Update transforms in place.
-    for (const item of items) {
-      const el = elPool.get(item.index);
-      if (el) el.style.transform = `translateY(${item.start}px)`;
-    }
+  }
+  if (logContainer.scrollLeft !== savedLeft) {
+    logContainer.scrollLeft = savedLeft;
   }
 
   logViewport.style.height = virtualizer.getTotalSize() + "px";
+
+  // Measure expanded (variable-height) elements
+  if (needsMeasure) {
+    measuring = true;
+    for (const el of contentEl.children) {
+      virtualizer.measureElement(el);
+    }
+    measuring = false;
+    logViewport.style.height = virtualizer.getTotalSize() + "px";
+  }
 }
 
 // ── Public API ─────────────────────────────────────────────────────────
@@ -317,9 +284,7 @@ export function scrollToBottom() {
 export function renderAllLogs() {
   entryCache.clear();
   pendingKey = null;
-  elPool.clear();
-  if (contentEl) contentEl.innerHTML = "";
-  lastRenderKey = "";
+  clearPool();
   if (virtualizer) {
     virtualizer.setOptions({ ...baseOpts, count: ui.filteredLogs });
     virtualizer._willUpdate();
@@ -337,14 +302,6 @@ export function scheduleScrollRestore(scrollTop, scrollLeft) {
 
 export function renderVisible() {
   scheduleRender();
-}
-
-export function clearBlocks() {
-  entryCache.clear();
-  pendingKey = null;
-  lastRenderKey = "";
-  elPool.clear();
-  if (contentEl) contentEl.innerHTML = "";
 }
 
 // ── Init ───────────────────────────────────────────────────────────────
@@ -370,13 +327,13 @@ export function initVirtualScroll() {
     onChange: () => scheduleRender(),
   };
   virtualizer = new Virtualizer(baseOpts);
+  virtualizer._didMount();
   virtualizer._willUpdate();
 
   // Batch responses from worker
   on("batch", (msg) => {
-    const start = msg.start;
     for (let i = 0; i < msg.entries.length; i++) {
-      entryCache.set(start + i, msg.entries[i]);
+      entryCache.set(msg.start + i, msg.entries[i]);
     }
     pendingKey = null;
     scheduleRender();
@@ -386,13 +343,17 @@ export function initVirtualScroll() {
   on("update", (msg) => {
     let filterChanged = false;
     if (msg.filterVersion !== lastFilterVersion) {
-      entryCache.clear();
       pendingKey = null;
       lastFilterVersion = msg.filterVersion;
-      lastRenderKey = "";
-      elPool.clear();
-      if (contentEl) contentEl.innerHTML = "";
       filterChanged = true;
+    }
+
+    // Populate cache with piggybacked tail entries so auto-scroll
+    // renders are instant — no getBatch round-trip needed.
+    if (msg.tail) {
+      for (let i = 0; i < msg.tail.length; i++) {
+        entryCache.set(msg.tailStart + i, msg.tail[i]);
+      }
     }
 
     if (msg.total > 0 && msg.total - msg.indexed > 100) {
@@ -407,6 +368,9 @@ export function initVirtualScroll() {
       statDbSize.textContent = `db: ${fmtSize(msg.dbSize)}`;
       statDbSize.classList.remove("hidden");
     }
+
+    const savedTop = logContainer.scrollTop;
+    const savedLeft = logContainer.scrollLeft;
 
     virtualizer.setOptions({ ...baseOpts, count: ui.filteredLogs });
     logViewport.style.height = virtualizer.getTotalSize() + "px";
@@ -426,9 +390,9 @@ export function initVirtualScroll() {
     } else if (ui.autoScroll) {
       scrollToBottom();
       scheduleRender();
-    } else if (filterChanged) {
-      syncAutoScroll();
-      scheduleRender();
+    } else {
+      logContainer.scrollTop = savedTop;
+      logContainer.scrollLeft = savedLeft;
     }
   });
 

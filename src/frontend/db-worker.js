@@ -178,6 +178,10 @@ let cachedProcesses = [];
 let cachedVolume = null;
 let cachedDbSize = 0;
 
+// How many tail entries to piggyback on each update message so the main
+// thread can render immediately without a getBatch round-trip.
+const TAIL_SIZE = 32;
+
 function sendUpdate() {
   updateTimer = null;
   const total = getEntryCount();
@@ -197,15 +201,31 @@ function sendUpdate() {
     cachedDbSize = getDBSize();
   }
 
+  // Piggyback the last TAIL_SIZE entries so auto-scroll renders
+  // are instant — no round-trip needed for the visible tail.
+  const filtered = filteredIndices.length;
+  const tailStart = Math.max(0, filtered - TAIL_SIZE);
+  const tailIndices = [];
+  for (let i = tailStart; i < filtered; i++) {
+    tailIndices.push(filteredIndices[i]);
+  }
+  const tailStored = getByIndices(tailIndices);
+  const tail = [];
+  for (const s of tailStored) {
+    if (s) tail.push(applyHighlights(renderEntry(s)));
+  }
+
   self.postMessage({
     type: "update",
     total,
-    filtered: filteredIndices.length,
+    filtered,
     processes: cachedProcesses,
     filterVersion,
     volume: cachedVolume,
     dbSize: cachedDbSize,
     indexed,
+    tailStart,
+    tail,
   });
 }
 
