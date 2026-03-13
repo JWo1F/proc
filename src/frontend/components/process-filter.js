@@ -1,4 +1,4 @@
-import { ui, onWorkerMessage } from "../main.js";
+import { ui, on } from "../main.js";
 import {
   processFilterBtn,
   processFilterDropdown,
@@ -73,7 +73,7 @@ export function initProcessFilter() {
   document.addEventListener("click", closeAllDropdowns);
 
   // Rebuild filter dropdown when processes change
-  onWorkerMessage("update", () => {
+  on("update", () => {
     rebuildProcessFilter();
   });
 }

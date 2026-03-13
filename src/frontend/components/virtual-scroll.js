@@ -6,7 +6,7 @@ import {
   observeElementOffset,
   observeElementRect,
 } from "@tanstack/virtual-core";
-import { ui, onWorkerMessage } from "../main.js";
+import { ui, on } from "../main.js";
 import {
   logViewport,
   logContainer,
@@ -14,9 +14,20 @@ import {
   logCountEl,
   filterCount,
   downloadFiltered,
+  statRecv,
+  statQueue,
+  statIndexed,
+  statDbSize,
 } from "../lib/dom.js";
 import { updateAutoScrollBtn } from "./auto-scroll.js";
 import { clearAllFilters } from "./search.js";
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+}
 
 const LEVEL_LETTERS = {
   debug: "D",
@@ -50,7 +61,7 @@ let pendingScrollToRaw = -1; // raw index to scroll to after filters clear
 
 // ── Log element factory ───────────────────────────────────────────────
 
-function createLogElement(entry) {
+function createLogElement(entry, sortedPos) {
   const div = document.createElement("div");
   let cls =
     "log-line flex items-start gap-3 px-2 py-0.5 rounded font-mono text-[13px] leading-relaxed";
@@ -60,11 +71,11 @@ function createLogElement(entry) {
   const idx = document.createElement("span");
   idx.className =
     "flex-none w-12 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed cursor-pointer";
-  idx.textContent = "0x" + entry.index.toString(16).toUpperCase();
+  idx.textContent = "0x" + sortedPos.toString(16).toUpperCase();
 
   const ts = document.createElement("span");
   ts.className =
-    "flex-none w-16 text-gray-400 dark:text-gray-500 text-xs leading-relaxed cursor-pointer hover:text-blue-500 dark:hover:text-blue-400";
+    "flex-none w-[5.5rem] text-gray-400 dark:text-gray-500 text-xs leading-relaxed cursor-pointer hover:text-blue-500 dark:hover:text-blue-400";
   ts.textContent = entry.timestamp;
 
   const proc = document.createElement("span");
@@ -143,7 +154,7 @@ function createLogElement(entry) {
 // ── Counts ────────────────────────────────────────────────────────────
 
 function updateCounts() {
-  logCountEl.textContent = `${ui.totalLogs} lines`;
+  logCountEl.textContent = `stored: ${ui.totalLogs.toLocaleString()}`;
   const hasFilter =
     ui.searchQuery || ui.hiddenProcesses.size > 0 || ui.activeTokens.size > 0;
   if (hasFilter && ui.filteredLogs !== ui.totalLogs) {
@@ -203,7 +214,7 @@ function render() {
     const key = `${missStart}:${missEnd}`;
     if (key !== pendingKey) {
       pendingKey = key;
-      ui.worker.postMessage({
+      ui.dbWorker.postMessage({
         type: "getBatch",
         id: key,
         start: missStart,
@@ -233,7 +244,7 @@ function render() {
   for (const item of items) {
     const entry = entryCache.get(item.index);
     if (!entry) continue;
-    const el = createLogElement(entry);
+    const el = createLogElement(entry, item.index);
     el.setAttribute("data-index", item.index);
     el.style.cssText = `position:absolute;top:0;left:0;min-width:100%;transform:translateY(${item.start}px)`;
     frag.appendChild(el);
@@ -330,7 +341,7 @@ export function initVirtualScroll() {
   virtualizer._willUpdate();
 
   // Batch responses from worker
-  onWorkerMessage("batch", (msg) => {
+  on("batch", (msg) => {
     const start = msg.start;
     for (let i = 0; i < msg.entries.length; i++) {
       entryCache.set(start + i, msg.entries[i]);
@@ -339,8 +350,20 @@ export function initVirtualScroll() {
     scheduleRender();
   });
 
+  // Ingest stats
+  on("ingestStats", (msg) => {
+    statRecv.textContent = `recv: ${msg.received.toLocaleString()}`;
+    statRecv.classList.remove("hidden");
+    if (msg.queued > 0) {
+      statQueue.textContent = `queue: ${msg.queued.toLocaleString()}`;
+      statQueue.classList.remove("hidden");
+    } else {
+      statQueue.classList.add("hidden");
+    }
+  });
+
   // Data update from worker
-  onWorkerMessage("update", (msg) => {
+  on("update", (msg) => {
     let filterChanged = false;
     if (msg.filterVersion !== lastFilterVersion) {
       entryCache.clear();
@@ -350,19 +373,28 @@ export function initVirtualScroll() {
       filterChanged = true;
     }
 
+    if (msg.total > 0 && msg.total - msg.indexed > 100) {
+      const pct = ((msg.indexed / msg.total) * 100) | 0;
+      statIndexed.textContent = `fts: ${pct}%`;
+      statIndexed.classList.remove("hidden");
+    } else {
+      statIndexed.classList.add("hidden");
+    }
+
+    if (msg.dbSize > 0) {
+      statDbSize.textContent = `db: ${fmtSize(msg.dbSize)}`;
+      statDbSize.classList.remove("hidden");
+    }
+
     virtualizer.setOptions({ ...baseOpts, count: ui.filteredLogs });
     logViewport.style.height = virtualizer.getTotalSize() + "px";
     emptyState.classList.toggle("hidden", ui.totalLogs > 0);
     updateCounts();
 
-    // After filters clear, scroll to the selected line
+    // After filters clear, ask worker for the sorted position of the target line
     if (pendingScrollToRaw >= 0 && filterChanged) {
-      // With no filters, raw index == filtered index
-      ui.autoScroll = false;
-      updateAutoScrollBtn();
-      virtualizer.scrollToIndex(pendingScrollToRaw, { align: "center" });
+      ui.dbWorker.postMessage({ type: "findPosition", rawIndex: pendingScrollToRaw });
       pendingScrollToRaw = -1;
-      scheduleRender();
     } else if (ui.autoScroll) {
       scrollToBottom();
       scheduleRender();
@@ -371,8 +403,18 @@ export function initVirtualScroll() {
     }
   });
 
+  // Worker resolved the sorted position of a raw index — scroll to it
+  on("position", (msg) => {
+    if (msg.position >= 0) {
+      ui.autoScroll = false;
+      updateAutoScrollBtn();
+      virtualizer.scrollToIndex(msg.position, { align: "center" });
+      scheduleRender();
+    }
+  });
+
   // Init event
-  onWorkerMessage("init", (msg) => {
+  on("init", (msg) => {
     ui.projectName = msg.name;
     document.title = `Procfile: ${msg.name}`;
     document.getElementById("app-title").textContent = msg.name;
@@ -380,7 +422,7 @@ export function initVirtualScroll() {
   });
 
   // Connection status
-  onWorkerMessage("connected", (msg) => {
+  on("connected", (msg) => {
     const badge = document.getElementById("status-badge");
     if (msg.value) {
       badge.className =
@@ -394,4 +436,5 @@ export function initVirtualScroll() {
         '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span>disconnected</span>';
     }
   });
+
 }

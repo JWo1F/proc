@@ -6,9 +6,11 @@ use crate::core::LogEvent;
 use axum::routing::get;
 use axum::Router;
 use colored::Color;
+use axum::http::{HeaderName, HeaderValue};
 use std::sync::Arc;
 use store::LogStore;
 use tokio::sync::broadcast;
+use tower_http::set_header::SetResponseHeaderLayer;
 
 /// Safe port range for deterministic hashing.
 const PORT_RANGE_START: u16 = 2592;
@@ -77,7 +79,15 @@ pub async fn start(rx: broadcast::Receiver<LogEvent>, port: u16) {
   let app = Router::new()
     .route("/api/sse", get(sse::handler))
     .fallback(assets::handler)
-    .with_state(store);
+    .with_state(store)
+    .layer(SetResponseHeaderLayer::overriding(
+      HeaderName::from_static("cross-origin-opener-policy"),
+      HeaderValue::from_static("same-origin"),
+    ))
+    .layer(SetResponseHeaderLayer::overriding(
+      HeaderName::from_static("cross-origin-embedder-policy"),
+      HeaderValue::from_static("credentialless"),
+    ));
 
   let mut current = port;
   let listener = loop {

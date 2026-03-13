@@ -1,4 +1,4 @@
-import { onWorkerMessage } from "../main.js";
+import { on } from "../main.js";
 
 const LEVEL_COLORS = {
   fatal: "#dc2626",
@@ -41,7 +41,7 @@ export function initLogsVolume() {
     if (!collapsed && lastVolume) renderVolume(lastVolume);
   });
 
-  onWorkerMessage("update", (msg) => {
+  on("update", (msg) => {
     if (!msg.volume) return;
     lastVolume = msg.volume;
     panel.classList.remove("hidden");
@@ -93,17 +93,20 @@ function renderVolume(vol) {
   barsEl.replaceChildren(frag);
 }
 
-function formatTime(unixSec) {
+function formatTime(unixSec, ms) {
   const d = new Date(unixSec * 1000);
   const p = (n) => (n < 10 ? "0" : "") + n;
-  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  const p3 = (n) => (n < 10 ? "00" : n < 100 ? "0" : "") + n;
+  const base = p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  return ms ? base + "." + p3(d.getMilliseconds()) : base;
 }
 
 function showTooltip(e, bucket, total, start, interval, idx) {
   const from = start + idx * interval;
   const to = from + interval;
+  const ms = interval < 1;
 
-  let html = `<div class="logs-volume-tooltip-time">${formatTime(from)} – ${formatTime(to)}</div>`;
+  let html = `<div class="logs-volume-tooltip-time">${formatTime(from, ms)} – ${formatTime(to, ms)}</div>`;
   for (const lvl of RENDER_ORDER) {
     if (bucket[lvl] === 0) continue;
     html += `<div class="logs-volume-tooltip-row">

@@ -410,10 +410,16 @@
       class="flex-none border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 px-4 py-1.5"
     >
       <div
-        class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400"
+        class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 font-mono gap-4"
       >
-        <span id="log-count">0 lines</span>
-        <span class="font-mono" id="app-addr"></span>
+        <div class="flex items-center gap-3">
+          <span id="log-count">0 lines</span>
+          <span id="stat-recv" class="hidden"></span>
+          <span id="stat-queue" class="hidden"></span>
+          <span id="stat-indexed" class="hidden"></span>
+          <span id="stat-db-size" class="hidden"></span>
+        </div>
+        <span id="app-addr"></span>
       </div>
     </footer>
 

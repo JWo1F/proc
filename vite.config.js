@@ -8,7 +8,14 @@ export default defineConfig({
     outDir: "../../dist",
     emptyOutDir: true,
   },
+  optimizeDeps: {
+    exclude: ["@sqlite.org/sqlite-wasm"],
+  },
   server: {
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "credentialless",
+    },
     proxy: {
       "/api": "http://localhost:2592",
     },

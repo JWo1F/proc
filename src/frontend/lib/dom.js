@@ -8,6 +8,10 @@ export const emptyState = $("empty-state");
 export const logCountEl = $("log-count");
 export const statusBadge = $("status-badge");
 export const filterCount = $("filter-count");
+export const statRecv = $("stat-recv");
+export const statQueue = $("stat-queue");
+export const statIndexed = $("stat-indexed");
+export const statDbSize = $("stat-db-size");
 
 // Search
 export const searchInput = $("search-input");

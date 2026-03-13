@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@sqlite.org/sqlite-wasm':
+        specifier: 3.51.2-build7
+        version: 3.51.2-build7
       '@tanstack/virtual-core':
         specifier: ^3.13.21
         version: 3.13.21
@@ -333,6 +336,10 @@ packages:
     resolution: {integrity: sha512-2HRCml6OztYXyJXAvdDXPKcawukWY2GpR5/nxKp4iBgiO3wcoEGkAaqctIbZcNB6KlUQBIqt8VYkNSj2397EfA==}
     cpu: [x64]
     os: [win32]
+
+  '@sqlite.org/sqlite-wasm@3.51.2-build7':
+    resolution: {integrity: sha512-11GK8eeFTP4pLCDdFZTwxeQ57bjghDo7JLNw1li+jmhXDr01lUcee2A+Rn6BJhPBU29oqf3OPBXfZtWDzoNCww==}
+    engines: {node: '>=22'}
 
   '@tailwindcss/node@4.2.1':
     resolution: {integrity: sha512-jlx6sLk4EOwO6hHe1oCGm1Q4AN/s0rSrTTPBGPM0/RQ6Uylwq17FuU8IeJJKEjtc6K6O07zsvP+gDO6MMWo7pg==}
@@ -794,6 +801,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.59.0':
     optional: true
+
+  '@sqlite.org/sqlite-wasm@3.51.2-build7': {}
 
   '@tailwindcss/node@4.2.1':
     dependencies:

@@ -1,13 +1,11 @@
-import { ui } from "../main.js";
+import { ui, on } from "../main.js";
 import { downloadAll, downloadFiltered } from "../lib/dom.js";
 import { closeAllDropdowns } from "./process-filter.js";
 
 let requestId = 0;
 const pending = new Map();
 
-function onWorkerResponse(e) {
-  const msg = e.data;
-  if (msg.type !== "allLogs" && msg.type !== "filteredLogs") return;
+function onResponse(msg) {
   const cb = pending.get(msg.id);
   if (cb) {
     pending.delete(msg.id);
@@ -19,7 +17,7 @@ function requestLogs(type) {
   return new Promise((resolve) => {
     const id = ++requestId;
     pending.set(id, resolve);
-    ui.worker.postMessage({ type, id });
+    ui.dbWorker.postMessage({ type, id });
   });
 }
 
@@ -53,7 +51,8 @@ function dateSuffix() {
 }
 
 export function initDownloads() {
-  ui.worker.addEventListener("message", onWorkerResponse);
+  on("allLogs", onResponse);
+  on("filteredLogs", onResponse);
 
   downloadAll.addEventListener("click", async () => {
     closeAllDropdowns();

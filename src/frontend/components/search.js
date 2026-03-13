@@ -61,7 +61,7 @@ function validateRegex() {
 }
 
 function sendFilter() {
-  ui.worker.postMessage({
+  ui.dbWorker.postMessage({
     type: "setFilter",
     query: ui.searchQuery,
     caseSensitive: ui.searchCaseSensitive,
