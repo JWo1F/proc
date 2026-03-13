@@ -204,7 +204,7 @@ function buildFilterClauses(filter) {
 
   if (filter.activeTokens && filter.activeTokens.length > 0) {
     for (const token of filter.activeTokens) {
-      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
+      conditions.push(`(LOWER(e.plain) LIKE ? ESCAPE '\\' OR LOWER(p.name) LIKE ? ESCAPE '\\')`);
       const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
       params.push(pattern, pattern);
       needsJoin = true;

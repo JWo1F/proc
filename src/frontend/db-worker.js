@@ -22,6 +22,10 @@ const processTable = new Map(); // id → { name, color }
 
 const insertQueue = [];
 
+// ── Timestamp lookup (idx → ts) for sorted insertion ────────────────
+
+let tsLookup = [];
+
 // ── Filter state ────────────────────────────────────────────────────
 
 let filteredIndices = [];
@@ -145,6 +149,22 @@ function matchesEntry(entry) {
   return true;
 }
 
+// Binary search: find insertion position in filteredIndices sorted by (ts, idx).
+function sortedInsertPos(ts, idx) {
+  let lo = 0, hi = filteredIndices.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    const midIdx = filteredIndices[mid];
+    const midTs = tsLookup[midIdx] ?? 0;
+    if (midTs < ts || (midTs === ts && midIdx < idx)) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
 function rebuildFilter() {
   buildHighlightRegex();
   const myVersion = ++rebuildVersion;
@@ -242,10 +262,20 @@ function runLoop() {
     const batch = insertQueue.shift();
     dbPutBatch(batch);
 
-    // Inline filter matching for new entries
+    // Populate ts lookup for sorted insertion
+    for (const entry of batch) {
+      tsLookup[entry.index] = entry.ts;
+    }
+
+    // Inline filter matching with sorted insertion by (ts, idx)
     for (const entry of batch) {
       if (matchesEntry(entry)) {
-        filteredIndices.push(entry.index);
+        const pos = sortedInsertPos(entry.ts, entry.index);
+        if (pos === filteredIndices.length) {
+          filteredIndices.push(entry.index);
+        } else {
+          filteredIndices.splice(pos, 0, entry.index);
+        }
       }
     }
 
@@ -301,6 +331,7 @@ self.onmessage = async (e) => {
       clearAll();
       insertQueue.length = 0;
       filteredIndices = [];
+      tsLookup = [];
       filterVersion++;
       self.postMessage({ type: "ready" });
       break;
