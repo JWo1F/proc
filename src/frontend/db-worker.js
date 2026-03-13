@@ -106,27 +106,34 @@ function processNameForEntry(entry) {
   return info ? info.name : "";
 }
 
-function matchesEntry(processIdOrName, plain) {
+function matchesEntry(entry) {
   let processName;
-  if (typeof processIdOrName === "number") {
-    const info = processTable.get(processIdOrName);
-    processName = info ? info.name : "";
+  if (entry.process !== undefined) {
+    processName = entry.process;
   } else {
-    processName = processIdOrName;
+    const info = processTable.get(entry.processId);
+    processName = info ? info.name : "";
   }
 
   const hidden = filter.hiddenProcesses;
   if (hidden.length > 0 && hidden.includes(processName)) return false;
+
+  const levels = filter.hiddenLevels;
+  if (levels.length > 0) {
+    const lvl = entry.level || "none";
+    if (levels.includes(lvl)) return false;
+  }
+
   const tokens = filter.activeTokens;
   if (tokens.length > 0) {
-    const lower = plain.toLowerCase();
+    const lower = entry.plain.toLowerCase();
     for (let t = 0; t < tokens.length; t++) {
       if (!lower.includes(tokens[t])) return false;
     }
   }
   if (!filter.query || !compiledRegex) return true;
   compiledRegex.lastIndex = 0;
-  if (compiledRegex.test(plain)) return true;
+  if (compiledRegex.test(entry.plain)) return true;
   compiledRegex.lastIndex = 0;
   if (compiledRegex.test(processName)) return true;
   return false;
@@ -261,7 +268,7 @@ function runLoop() {
 
     // Inline filter matching for new entries
     for (const entry of batch) {
-      if (matchesEntry(entry.processId, entry.plain)) {
+      if (matchesEntry(entry)) {
         filteredIndices.push(entry.index);
       }
     }
