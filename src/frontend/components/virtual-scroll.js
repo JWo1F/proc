@@ -52,6 +52,9 @@ let lastRenderKey = "";
 let selectedRawIndex = -1;
 let pendingScrollToRaw = -1;
 
+// DOM element pool keyed by data-index — reused across renders
+const elPool = new Map(); // filteredIndex → DOM element
+
 // ── Expand/collapse toggle ────────────────────────────────────────────
 
 export function toggleExpand(rawIndex) {
@@ -71,80 +74,80 @@ export function toggleExpand(rawIndex) {
 
 function createLogElement(entry, sortedPos) {
   const div = document.createElement("div");
+  div.className = buildRowClass(entry);
+  div.innerHTML = buildRowHTML(entry, sortedPos);
+  return div;
+}
+
+function buildRowClass(entry) {
   let cls =
     "log-line flex items-start gap-3 px-2 py-0.5 rounded font-mono text-[13px] leading-relaxed";
   if (entry.level) cls += ` level-${entry.level}`;
-  div.className = cls;
-
-  const idx = document.createElement("span");
-  idx.className =
-    "flex-none w-12 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed cursor-pointer";
-  idx.textContent = "0x" + sortedPos.toString(16).toUpperCase();
-
-  const ts = document.createElement("span");
-  ts.className =
-    "flex-none w-[5.5rem] text-gray-400 dark:text-gray-500 text-xs leading-relaxed cursor-pointer hover:text-blue-500 dark:hover:text-blue-400";
-  ts.textContent = entry.timestamp;
-
-  const proc = document.createElement("span");
-  proc.className =
-    "flex-none w-20 truncate text-xs font-medium leading-relaxed";
-  proc.style.color = entry.color;
-  proc.textContent = entry.process;
-
-  const lvl = document.createElement("span");
-  lvl.className =
-    "flex-none w-4 text-center text-xs font-bold leading-relaxed level-badge level-badge-" +
-    (entry.level || "none");
-  lvl.textContent = LEVEL_LETTERS[entry.level] || "-";
-
-  const content = document.createElement("span");
-  content.className = "flex-1 min-w-0 leading-relaxed whitespace-pre";
-  if (entry.system) {
-    content.classList.add("font-medium");
-    content.style.color = entry.color;
-  }
-  content.innerHTML = entry.html;
-
   const expanded = expandedLines.has(entry.index);
-  if (expanded) {
-    div.classList.add("expanded");
-    content.classList.remove("whitespace-pre");
-    content.classList.add("whitespace-pre-wrap", "break-all");
-  }
+  if (expanded) cls += " expanded";
+  if (entry.index === selectedRawIndex) cls += " log-line-selected";
+  return cls;
+}
 
-  if (entry.index === selectedRawIndex) {
-    div.classList.add("log-line-selected");
-  }
+function buildRowHTML(entry, sortedPos) {
+  const expanded = expandedLines.has(entry.index);
+  const sysFm = entry.system ? " font-medium" : "";
+  const sysColor = entry.system ? ` style="color:${entry.color}"` : "";
+  const wsPre = expanded ? "whitespace-pre-wrap break-all" : "whitespace-pre";
 
-  idx.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleExpand(entry.index);
-  });
+  return (
+    `<span class="log-idx flex-none w-12 text-right text-gray-400 dark:text-gray-600 select-none text-xs leading-relaxed cursor-pointer">0x${sortedPos.toString(16).toUpperCase()}</span>` +
+    `<span class="log-ts flex-none w-[5.5rem] text-gray-400 dark:text-gray-500 text-xs leading-relaxed cursor-pointer hover:text-blue-500 dark:hover:text-blue-400">${entry.timestamp}</span>` +
+    `<span class="flex-none w-20 truncate text-xs font-medium leading-relaxed" style="color:${entry.color}">${entry.process}</span>` +
+    `<span class="flex-none w-4 text-center text-xs font-bold leading-relaxed level-badge level-badge-${entry.level || "none"}">${LEVEL_LETTERS[entry.level] || "-"}</span>` +
+    `<span class="flex-1 min-w-0 leading-relaxed ${wsPre}${sysFm}"${sysColor}>${entry.html}</span>`
+  );
+}
 
-  ts.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (selectedRawIndex === entry.index) {
-      selectedRawIndex = -1;
-      lastRenderKey = "";
-      render();
+function updateElement(el, entry, sortedPos) {
+  el.className = buildRowClass(entry);
+  el.innerHTML = buildRowHTML(entry, sortedPos);
+}
+
+// ── Event delegation ─────────────────────────────────────────────────
+
+function initDelegation() {
+  contentEl.addEventListener("click", (e) => {
+    const idx = e.target.closest(".log-idx");
+    if (idx) {
+      e.stopPropagation();
+      const row = idx.closest(".log-line");
+      const entry = entryForRow(row);
+      if (entry) toggleExpand(entry.index);
       return;
     }
-    selectedRawIndex = entry.index;
-    ui.autoScroll = false;
-    updateAutoScrollBtn();
-    pendingScrollToRaw = entry.index;
-    clearAllFilters();
-    renderAllLogs();
+
+    const ts = e.target.closest(".log-ts");
+    if (ts) {
+      e.stopPropagation();
+      const row = ts.closest(".log-line");
+      const entry = entryForRow(row);
+      if (!entry) return;
+      if (selectedRawIndex === entry.index) {
+        selectedRawIndex = -1;
+        lastRenderKey = "";
+        render();
+        return;
+      }
+      selectedRawIndex = entry.index;
+      ui.autoScroll = false;
+      updateAutoScrollBtn();
+      pendingScrollToRaw = entry.index;
+      clearAllFilters();
+      renderAllLogs();
+    }
   });
+}
 
-  div.appendChild(idx);
-  div.appendChild(ts);
-  div.appendChild(proc);
-  div.appendChild(lvl);
-  div.appendChild(content);
-
-  return div;
+function entryForRow(row) {
+  if (!row) return null;
+  const idx = parseInt(row.getAttribute("data-index"), 10);
+  return entryCache.get(idx) || null;
 }
 
 // ── Counts ────────────────────────────────────────────────────────────
@@ -182,7 +185,10 @@ function render() {
   }
 
   if (!virtualizer || ui.filteredLogs === 0) {
-    if (contentEl) contentEl.innerHTML = "";
+    if (contentEl) {
+      contentEl.innerHTML = "";
+      elPool.clear();
+    }
     return;
   }
 
@@ -190,9 +196,11 @@ function render() {
   const items = virtualizer.getVirtualItems();
   if (items.length === 0) {
     contentEl.innerHTML = "";
+    elPool.clear();
     return;
   }
 
+  // Request missing entries from worker
   let missStart = -1;
   let missEnd = -1;
   for (const item of items) {
@@ -215,56 +223,88 @@ function render() {
     }
   }
 
-  let renderKey = `sel:${selectedRawIndex};`;
+  // Content key: which items, cache state, expand state, selection.
+  // Excludes positions — those are updated in the fast path.
+  let contentKey = `sel:${selectedRawIndex};`;
   for (const item of items) {
     const entry = entryCache.get(item.index);
     const exp = entry && expandedLines.has(entry.index) ? 1 : 0;
-    renderKey += `${item.index}:${item.start}:${entry ? 1 : 0}:${exp},`;
+    contentKey += `${item.index}:${entry ? 1 : 0}:${exp},`;
   }
 
-  if (renderKey === lastRenderKey && !measureAll) {
-    logViewport.style.height = virtualizer.getTotalSize() + "px";
-    return;
-  }
-  lastRenderKey = renderKey;
+  const contentChanged = contentKey !== lastRenderKey || measureAll;
 
-  const frag = document.createDocumentFragment();
-  let hasExpanded = false;
-  for (const item of items) {
-    const entry = entryCache.get(item.index);
-    if (!entry) continue;
-    const el = createLogElement(entry, item.index);
-    el.setAttribute("data-index", item.index);
-    el.style.cssText = `position:absolute;top:0;left:0;min-width:100%;transform:translateY(${item.start}px)`;
-    frag.appendChild(el);
-    if (expandedLines.has(entry.index)) hasExpanded = true;
-  }
+  if (contentChanged) {
+    lastRenderKey = contentKey;
 
-  if (frag.childNodes.length === 0) {
-    lastRenderKey = "";
-    return;
-  }
+    // Determine which items are visible and have cached entries
+    const visibleSet = new Set();
+    let hasExpanded = false;
 
-  contentEl.innerHTML = "";
-  contentEl.appendChild(frag);
+    for (const item of items) {
+      const entry = entryCache.get(item.index);
+      if (!entry) continue;
+      visibleSet.add(item.index);
 
-  if (measureAll || hasExpanded) {
-    rendering = true;
-    for (const el of [...contentEl.children]) {
-      virtualizer.measureElement(el);
+      let el = elPool.get(item.index);
+      if (el) {
+        // Reuse — update content only if needed (expand/select state could change)
+        updateElement(el, entry, item.index);
+      } else {
+        el = createLogElement(entry, item.index);
+        el.setAttribute("data-index", item.index);
+        elPool.set(item.index, el);
+      }
+      el.style.cssText = `position:absolute;top:0;left:0;min-width:100%;transform:translateY(${item.start}px)`;
+      if (expandedLines.has(entry.index)) hasExpanded = true;
     }
-    rendering = false;
-    measureAll = false;
 
-    logViewport.style.height = virtualizer.getTotalSize() + "px";
+    // Remove elements no longer visible
+    for (const [idx, el] of elPool) {
+      if (!visibleSet.has(idx)) {
+        el.remove();
+        elPool.delete(idx);
+      }
+    }
 
-    if (needsRerender) {
-      needsRerender = false;
-      render();
+    // Append new elements not yet in DOM
+    for (const idx of visibleSet) {
+      const el = elPool.get(idx);
+      if (el && !el.parentNode) {
+        contentEl.appendChild(el);
+      }
+    }
+
+    if (visibleSet.size === 0) {
+      lastRenderKey = "";
+      return;
+    }
+
+    if (measureAll || hasExpanded) {
+      rendering = true;
+      for (const el of [...contentEl.children]) {
+        virtualizer.measureElement(el);
+      }
+      rendering = false;
+      measureAll = false;
+
+      logViewport.style.height = virtualizer.getTotalSize() + "px";
+
+      if (needsRerender) {
+        needsRerender = false;
+        render();
+      }
+      return;
     }
   } else {
-    logViewport.style.height = virtualizer.getTotalSize() + "px";
+    // Fast path: only positions changed (scroll). Update transforms in place.
+    for (const item of items) {
+      const el = elPool.get(item.index);
+      if (el) el.style.transform = `translateY(${item.start}px)`;
+    }
   }
+
+  logViewport.style.height = virtualizer.getTotalSize() + "px";
 }
 
 // ── Public API ─────────────────────────────────────────────────────────
@@ -277,6 +317,9 @@ export function scrollToBottom() {
 export function renderAllLogs() {
   entryCache.clear();
   pendingKey = null;
+  elPool.clear();
+  if (contentEl) contentEl.innerHTML = "";
+  lastRenderKey = "";
   if (virtualizer) {
     virtualizer.setOptions({ ...baseOpts, count: ui.filteredLogs });
     virtualizer._willUpdate();
@@ -300,6 +343,7 @@ export function clearBlocks() {
   entryCache.clear();
   pendingKey = null;
   lastRenderKey = "";
+  elPool.clear();
   if (contentEl) contentEl.innerHTML = "";
 }
 
@@ -309,6 +353,7 @@ export function initVirtualScroll() {
   contentEl = document.createElement("div");
   contentEl.style.cssText = "position:absolute;top:0;left:0;min-width:100%";
   logViewport.appendChild(contentEl);
+  initDelegation();
 
   baseOpts = {
     count: 0,
@@ -345,6 +390,8 @@ export function initVirtualScroll() {
       pendingKey = null;
       lastFilterVersion = msg.filterVersion;
       lastRenderKey = "";
+      elPool.clear();
+      if (contentEl) contentEl.innerHTML = "";
       filterChanged = true;
     }
 
