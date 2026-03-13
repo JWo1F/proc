@@ -205,3 +205,18 @@
 .level-badge-fatal {
   color: #dc2626;
 }
+
+/* Dialog */
+
+dialog[open] {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  margin: 0;
+}
+
+dialog::backdrop {
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+}

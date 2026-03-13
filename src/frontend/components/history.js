@@ -14,7 +14,7 @@ import {
   searchBar,
   searchError,
 } from "../lib/dom.js";
-import { sendFilter, updateSearchToggles } from "./search.js";
+import { sendFilter } from "./search.js";
 import { renderAllLogs, scheduleScrollRestore } from "./virtual-scroll.js";
 import { rebuildProcessFilter } from "./process-filter.js";
 import { rebuildLevelFilter } from "./level-filter.js";
@@ -27,9 +27,6 @@ let restoring = false;
 function snapshot() {
   return {
     searchQuery: ui.searchQuery,
-    searchCaseSensitive: ui.searchCaseSensitive,
-    searchWholeWord: ui.searchWholeWord,
-    searchRegex: ui.searchRegex,
     hiddenProcesses: new Set(ui.hiddenProcesses),
     hiddenLevels: new Set(ui.hiddenLevels),
     activeTokens: new Set(ui.activeTokens),
@@ -41,9 +38,6 @@ function snapshot() {
 function statesEqual(a, b) {
   return (
     a.searchQuery === b.searchQuery &&
-    a.searchCaseSensitive === b.searchCaseSensitive &&
-    a.searchWholeWord === b.searchWholeWord &&
-    a.searchRegex === b.searchRegex &&
     setsEqual(a.hiddenProcesses, b.hiddenProcesses) &&
     setsEqual(a.hiddenLevels, b.hiddenLevels) &&
     setsEqual(a.activeTokens, b.activeTokens)
@@ -67,9 +61,6 @@ function applyState(state) {
   restoring = true;
 
   ui.searchQuery = state.searchQuery;
-  ui.searchCaseSensitive = state.searchCaseSensitive;
-  ui.searchWholeWord = state.searchWholeWord;
-  ui.searchRegex = state.searchRegex;
   ui.hiddenProcesses = new Set(state.hiddenProcesses);
   ui.hiddenLevels = new Set(state.hiddenLevels);
   ui.activeTokens = new Set(state.activeTokens);
@@ -79,7 +70,6 @@ function applyState(state) {
   searchClear.classList.toggle("hidden", !state.searchQuery);
   searchError.classList.add("hidden");
   searchBar.classList.remove("!border-red-400", "dark:!border-red-500");
-  updateSearchToggles();
   rebuildProcessFilter();
   rebuildLevelFilter();
   renderTokenBar();

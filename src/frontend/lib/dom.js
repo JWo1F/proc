@@ -17,9 +17,6 @@ export const statDbSize = $("stat-db-size");
 export const searchInput = $("search-input");
 export const searchClear = $("search-clear");
 export const searchBar = $("search-bar");
-export const searchCaseBtn = $("search-case-btn");
-export const searchWordBtn = $("search-word-btn");
-export const searchRegexBtn = $("search-regex-btn");
 export const searchError = $("search-error");
 
 // Theme

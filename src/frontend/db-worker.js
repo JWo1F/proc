@@ -28,14 +28,11 @@ let filteredIndices = [];
 
 let filter = {
   query: "",
-  caseSensitive: false,
-  wholeWord: false,
-  regex: false,
   hiddenProcesses: [],
   hiddenLevels: [],
   activeTokens: [],
 };
-let compiledRegex = null;
+let highlightRegex = null;
 let filterVersion = 0;
 let rebuildVersion = 0;
 
@@ -68,43 +65,55 @@ function renderEntry(stored) {
 }
 
 function applyHighlights(entry) {
-  if (!compiledRegex) return entry;
+  if (!highlightRegex) return entry;
   const html = entry.html.replace(/(<[^>]+>)|([^<]+)/g, (m, tag, text) => {
     if (tag) return tag;
-    compiledRegex.lastIndex = 0;
+    highlightRegex.lastIndex = 0;
     return text.replace(
-      compiledRegex,
+      highlightRegex,
       '<span class="search-highlight">$&</span>',
     );
   });
   return { ...entry, html };
 }
 
-// ── Filtering ───────────────────────────────────────────────────────
+// ── Highlight regex from FTS query ──────────────────────────────────
 
-function buildRegex() {
+// FTS5 operators that should not be highlighted
+const FTS_OPS = new Set(["AND", "OR", "NOT", "NEAR"]);
+
+function extractSearchTerms(query) {
+  const terms = [];
+  const re = /"([^"]+)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(query)) !== null) {
+    const term = m[1] || m[2];
+    if (FTS_OPS.has(term.toUpperCase())) continue;
+    if (/^\w+:$/.test(term)) continue;
+    const clean = term.replace(/\*$/, "");
+    if (clean) terms.push(clean);
+  }
+  return terms;
+}
+
+function buildHighlightRegex() {
   if (!filter.query) {
-    compiledRegex = null;
+    highlightRegex = null;
     return;
   }
+  const terms = extractSearchTerms(filter.query);
+  if (terms.length === 0) { highlightRegex = null; return; }
   try {
-    const flags = filter.caseSensitive ? "g" : "gi";
-    let pattern = filter.regex
-      ? filter.query
-      : filter.query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (filter.wholeWord) pattern = `\\b${pattern}\\b`;
-    compiledRegex = new RegExp(pattern, flags);
+    const pattern = terms
+      .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .join("|");
+    highlightRegex = new RegExp(pattern, "gi");
   } catch {
-    compiledRegex = null;
+    highlightRegex = null;
   }
 }
 
-function processNameForEntry(entry) {
-  // entry from inline filter has processId; rendered entries have process
-  if (entry.process !== undefined) return entry.process;
-  const info = processTable.get(entry.processId);
-  return info ? info.name : "";
-}
+// ── Filtering ───────────────────────────────────────────────────────
 
 function matchesEntry(entry) {
   let processName;
@@ -131,54 +140,21 @@ function matchesEntry(entry) {
       if (!lower.includes(tokens[t])) return false;
     }
   }
-  if (!filter.query || !compiledRegex) return true;
-  compiledRegex.lastIndex = 0;
-  if (compiledRegex.test(entry.plain)) return true;
-  compiledRegex.lastIndex = 0;
-  if (compiledRegex.test(processName)) return true;
-  return false;
-}
 
-function matchesText(entry) {
-  const tokens = filter.activeTokens;
-  if (tokens.length > 0) {
-    const lower = entry.plain.toLowerCase();
-    for (let t = 0; t < tokens.length; t++) {
-      if (!lower.includes(tokens[t])) return false;
-    }
-  }
-  if (!compiledRegex) return true;
-  const processName = processNameForEntry(entry);
-  compiledRegex.lastIndex = 0;
-  if (compiledRegex.test(entry.plain)) return true;
-  compiledRegex.lastIndex = 0;
-  if (compiledRegex.test(processName)) return true;
-  return false;
+  // Text search is handled by FTS in SQL; skip for inline matching
+  return true;
 }
 
 function rebuildFilter() {
-  buildRegex();
+  buildHighlightRegex();
   const myVersion = ++rebuildVersion;
 
-  let candidates = queryFilteredIndices({
+  const candidates = queryFilteredIndices({
     hiddenProcesses: filter.hiddenProcesses,
     hiddenLevels: filter.hiddenLevels,
-    query: (!filter.regex && filter.query) || null,
+    query: filter.query || null,
     activeTokens: filter.activeTokens,
   });
-
-  if (rebuildVersion !== myVersion) return;
-
-  // Post-filter with JS regex (SQL can't do JS regex)
-  if (filter.regex && compiledRegex && candidates.length > 0) {
-    const stored = getByIndices(candidates);
-    if (rebuildVersion !== myVersion) return;
-    const verified = [];
-    for (const entry of stored) {
-      if (entry && matchesText(entry)) verified.push(entry.index);
-    }
-    candidates = verified;
-  }
 
   if (rebuildVersion !== myVersion) return;
   filteredIndices = candidates;
@@ -205,7 +181,7 @@ function sendUpdate() {
     cachedVolume = computeVolume({
       hiddenProcesses: filter.hiddenProcesses,
       hiddenLevels: filter.hiddenLevels,
-      query: (!filter.regex && filter.query) || null,
+      query: filter.query || null,
       activeTokens: filter.activeTokens,
     });
     cachedDbSize = getDBSize();
@@ -359,9 +335,6 @@ self.onmessage = async (e) => {
     case "setFilter": {
       filter = {
         query: msg.query || "",
-        caseSensitive: !!msg.caseSensitive,
-        wholeWord: !!msg.wholeWord,
-        regex: !!msg.regex,
         hiddenProcesses: msg.hiddenProcesses || [],
         hiddenLevels: msg.hiddenLevels || [],
         activeTokens: (msg.activeTokens || []).map((t) => t.toLowerCase()),
@@ -394,7 +367,7 @@ self.onmessage = async (e) => {
       const entries = getFilteredEntries({
         hiddenProcesses: filter.hiddenProcesses,
         hiddenLevels: filter.hiddenLevels,
-        query: (!filter.regex && filter.query) || null,
+        query: filter.query || null,
         activeTokens: filter.activeTokens,
       }).map((e) => ({
         timestamp: formatTimestamp(e.ts, e.hasMs),

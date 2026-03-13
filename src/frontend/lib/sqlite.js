@@ -169,6 +169,53 @@ function rowToEntry(row) {
 const ENTRY_SELECT = `SELECT e.idx, p.name, p.color, e.raw, e.plain, e.level, e.system, e.ts, e.has_ms
 FROM entries e JOIN processes p ON e.process_id = p.id`;
 
+// ── Shared filter clause builder ────────────────────────────────────
+
+function buildFilterClauses(filter) {
+  const conditions = [];
+  const params = [];
+  let needsJoin = false;
+
+  if (filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
+    const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
+    conditions.push(`p.name NOT IN (${placeholders})`);
+    params.push(...filter.hiddenProcesses);
+    needsJoin = true;
+  }
+
+  if (filter.hiddenLevels && filter.hiddenLevels.length > 0) {
+    const levelConds = [];
+    const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
+    if (nonNoneLevels.length > 0) {
+      const placeholders = nonNoneLevels.map(() => "?").join(",");
+      levelConds.push(`e.level IN (${placeholders})`);
+      params.push(...nonNoneLevels);
+    }
+    if (filter.hiddenLevels.includes("none")) {
+      levelConds.push("e.level IS NULL");
+    }
+    conditions.push(`NOT (${levelConds.join(" OR ")})`);
+  }
+
+  if (filter.query) {
+    conditions.push(`e.idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
+    params.push(filter.query);
+  }
+
+  if (filter.activeTokens && filter.activeTokens.length > 0) {
+    for (const token of filter.activeTokens) {
+      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
+      const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+      params.push(pattern, pattern);
+      needsJoin = true;
+    }
+  }
+
+  return { conditions, params, needsJoin };
+}
+
+// ── Query functions ─────────────────────────────────────────────────
+
 export function getByIndices(indices) {
   if (!db || indices.length === 0) return [];
   const lookup = new Map();
@@ -198,45 +245,7 @@ export function getAllSorted() {
 
 export function queryFilteredIndices(filter) {
   if (!db) return [];
-  const conditions = [];
-  const params = [];
-
-  if (filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
-    const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
-    conditions.push(`p.name NOT IN (${placeholders})`);
-    params.push(...filter.hiddenProcesses);
-  }
-
-  if (filter.hiddenLevels && filter.hiddenLevels.length > 0) {
-    const levelConds = [];
-    const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
-    if (nonNoneLevels.length > 0) {
-      const placeholders = nonNoneLevels.map(() => "?").join(",");
-      levelConds.push(`e.level IN (${placeholders})`);
-      params.push(...nonNoneLevels);
-    }
-    if (filter.hiddenLevels.includes("none")) {
-      levelConds.push("e.level IS NULL");
-    }
-    conditions.push(`NOT (${levelConds.join(" OR ")})`);
-  }
-
-  // FTS5 match for plain text query
-  if (filter.query) {
-    // Escape double quotes in the query for FTS5
-    const escaped = filter.query.replace(/"/g, '""');
-    conditions.push(`e.idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
-    params.push(`"${escaped}"`);
-  }
-
-  // Token filtering via LIKE (tokens are already lowercased)
-  if (filter.activeTokens && filter.activeTokens.length > 0) {
-    for (const token of filter.activeTokens) {
-      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
-      const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
-      params.push(pattern, pattern);
-    }
-  }
+  const { conditions, params } = buildFilterClauses(filter);
 
   let sql = "SELECT e.idx FROM entries e JOIN processes p ON e.process_id = p.id";
   if (conditions.length > 0) {
@@ -273,47 +282,7 @@ export function getProcesses() {
 export function computeVolume(filter) {
   if (!db) return null;
 
-  // Build WHERE clause from filter
-  const conditions = [];
-  const params = [];
-  let needsJoin = false;
-
-  if (filter && filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
-    const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
-    conditions.push(`p.name NOT IN (${placeholders})`);
-    params.push(...filter.hiddenProcesses);
-    needsJoin = true;
-  }
-
-  if (filter && filter.hiddenLevels && filter.hiddenLevels.length > 0) {
-    const levelConds = [];
-    const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
-    if (nonNoneLevels.length > 0) {
-      const placeholders = nonNoneLevels.map(() => "?").join(",");
-      levelConds.push(`e.level IN (${placeholders})`);
-      params.push(...nonNoneLevels);
-    }
-    if (filter.hiddenLevels.includes("none")) {
-      levelConds.push("e.level IS NULL");
-    }
-    conditions.push(`NOT (${levelConds.join(" OR ")})`);
-  }
-
-  if (filter && filter.query) {
-    const escaped = filter.query.replace(/"/g, '""');
-    conditions.push(`e.idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
-    params.push(`"${escaped}"`);
-  }
-
-  if (filter && filter.activeTokens && filter.activeTokens.length > 0) {
-    for (const token of filter.activeTokens) {
-      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
-      const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
-      params.push(pattern, pattern);
-      needsJoin = true;
-    }
-  }
-
+  const { conditions, params, needsJoin } = buildFilterClauses(filter);
   const join = needsJoin ? " JOIN processes p ON e.process_id = p.id" : "";
   const where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
 
@@ -361,42 +330,7 @@ export function computeVolume(filter) {
 
 export function getFilteredEntries(filter) {
   if (!db) return [];
-  const conditions = [];
-  const params = [];
-
-  if (filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
-    const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
-    conditions.push(`p.name NOT IN (${placeholders})`);
-    params.push(...filter.hiddenProcesses);
-  }
-
-  if (filter.hiddenLevels && filter.hiddenLevels.length > 0) {
-    const levelConds = [];
-    const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
-    if (nonNoneLevels.length > 0) {
-      const placeholders = nonNoneLevels.map(() => "?").join(",");
-      levelConds.push(`e.level IN (${placeholders})`);
-      params.push(...nonNoneLevels);
-    }
-    if (filter.hiddenLevels.includes("none")) {
-      levelConds.push("e.level IS NULL");
-    }
-    conditions.push(`NOT (${levelConds.join(" OR ")})`);
-  }
-
-  if (filter.query) {
-    const escaped = filter.query.replace(/"/g, '""');
-    conditions.push(`e.idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
-    params.push(`"${escaped}"`);
-  }
-
-  if (filter.activeTokens && filter.activeTokens.length > 0) {
-    for (const token of filter.activeTokens) {
-      conditions.push(`(LOWER(e.plain) LIKE ? OR LOWER(p.name) LIKE ?)`);
-      const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
-      params.push(pattern, pattern);
-    }
-  }
+  const { conditions, params } = buildFilterClauses(filter);
 
   let sql = `${ENTRY_SELECT}`;
   if (conditions.length > 0) {

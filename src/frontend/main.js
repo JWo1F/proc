@@ -23,9 +23,6 @@ export const ui = {
   hiddenProcesses: new Set(),
   hiddenLevels: new Set(),
   searchQuery: "",
-  searchCaseSensitive: false,
-  searchWholeWord: false,
-  searchRegex: false,
   activeTokens: new Set(), // token values for cross-process correlation
 };
 
