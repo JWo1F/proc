@@ -8,6 +8,7 @@ const COMPACT_INDICATOR: &str = "▌";
 pub struct StdoutConfig {
   pub timestamps: bool,
   pub compact: bool,
+  pub no_system: bool,
   pub name_width: usize,
 }
 
@@ -17,6 +18,9 @@ pub async fn run(mut rx: broadcast::Receiver<LogEvent>, config: StdoutConfig) {
   loop {
     match rx.recv().await {
       Ok(event) => {
+        if config.no_system && event.system {
+          continue;
+        }
         println!("{}", format_line(&event, &config));
       }
       Err(broadcast::error::RecvError::Closed) => break,

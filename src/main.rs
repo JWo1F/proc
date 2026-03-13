@@ -50,6 +50,10 @@ struct RunOptions {
   #[arg(short = 'q', long)]
   silent: bool,
 
+  /// Hide system messages (Spawned, Stopped, etc.)
+  #[arg(long)]
+  no_system: bool,
+
   /// Start web UI (optional port, default: derived from folder name)
   #[cfg(feature = "web")]
   #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "0")]
@@ -156,8 +160,9 @@ fn maybe_spawn_web(opts: &RunOptions, log_tx: &broadcast::Sender<crate::core::Lo
     } else {
       port
     };
+    let no_system = opts.no_system;
     tokio::spawn(async move {
-      web::start(rx, resolved_port).await;
+      web::start(rx, resolved_port, no_system).await;
     });
   }
 }
@@ -177,6 +182,7 @@ fn spawn_stdout(
     stdout::StdoutConfig {
       timestamps: opts.timestamps,
       compact: opts.compact,
+      no_system: opts.no_system,
       name_width,
     },
   )))

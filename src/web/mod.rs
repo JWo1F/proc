@@ -34,10 +34,17 @@ fn color_to_css(color: &Color) -> String {
 }
 
 /// Reads LogEvents from the core broadcast channel and feeds the web LogStore.
-async fn log_consumer(mut rx: broadcast::Receiver<LogEvent>, store: Arc<LogStore>) {
+async fn log_consumer(
+  mut rx: broadcast::Receiver<LogEvent>,
+  store: Arc<LogStore>,
+  no_system: bool,
+) {
   loop {
     match rx.recv().await {
       Ok(event) => {
+        if no_system && event.system {
+          continue;
+        }
         let now = chrono::Utc::now();
         let ts = now.timestamp() as f64 + now.timestamp_subsec_millis() as f64 / 1000.0;
         let css_color = color_to_css(&event.color);
@@ -70,12 +77,12 @@ pub fn port_for_cwd() -> u16 {
 }
 
 /// Start the web module: spawns a log consumer task and the HTTP server.
-pub async fn start(rx: broadcast::Receiver<LogEvent>, port: u16) {
+pub async fn start(rx: broadcast::Receiver<LogEvent>, port: u16, no_system: bool) {
   let store = Arc::new(LogStore::new());
 
   // Spawn the log consumer that bridges core events to the web LogStore
   let consumer_store = Arc::clone(&store);
-  tokio::spawn(log_consumer(rx, consumer_store));
+  tokio::spawn(log_consumer(rx, consumer_store, no_system));
 
   let app = Router::new()
     .route("/api/sse", get(sse::handler))
