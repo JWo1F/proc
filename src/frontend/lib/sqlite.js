@@ -238,17 +238,59 @@ export function getProcesses() {
   return rows; // [[process, color], ...]
 }
 
-export function computeVolume() {
+export function computeVolume(filter) {
   if (!db) return null;
+
+  // Build WHERE clause from filter
+  const conditions = [];
+  const params = [];
+
+  if (filter && filter.hiddenProcesses && filter.hiddenProcesses.length > 0) {
+    const placeholders = filter.hiddenProcesses.map(() => "?").join(",");
+    conditions.push(`process NOT IN (${placeholders})`);
+    params.push(...filter.hiddenProcesses);
+  }
+
+  if (filter && filter.hiddenLevels && filter.hiddenLevels.length > 0) {
+    const levelConds = [];
+    const nonNoneLevels = filter.hiddenLevels.filter((l) => l !== "none");
+    if (nonNoneLevels.length > 0) {
+      const placeholders = nonNoneLevels.map(() => "?").join(",");
+      levelConds.push(`level IN (${placeholders})`);
+      params.push(...nonNoneLevels);
+    }
+    if (filter.hiddenLevels.includes("none")) {
+      levelConds.push("level IS NULL");
+    }
+    conditions.push(`NOT (${levelConds.join(" OR ")})`);
+  }
+
+  if (filter && filter.query) {
+    const escaped = filter.query.replace(/"/g, '""');
+    conditions.push(`idx IN (SELECT rowid FROM entries_fts WHERE entries_fts MATCH ?)`);
+    params.push(`"${escaped}"`);
+  }
+
+  if (filter && filter.activeTokens && filter.activeTokens.length > 0) {
+    for (const token of filter.activeTokens) {
+      conditions.push(`(LOWER(plain) LIKE ? OR LOWER(process) LIKE ?)`);
+      const pattern = `%${token.replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+      params.push(pattern, pattern);
+    }
+  }
+
+  const where = conditions.length > 0 ? " WHERE " + conditions.join(" AND ") : "";
+
+  // Time range always from all entries so bucket layout is stable
   const range = db.exec({
     sql: "SELECT MIN(ts), MAX(ts), COUNT(*) FROM entries",
     returnValue: "resultRows",
   });
   if (!range.length || range[0][2] === 0) return null;
 
-  const [minTs, maxTs, count] = range[0];
+  const [minTs, maxTs] = range[0];
   const span = maxTs - minTs;
-  const BUCKET_TARGET = 60;
+  const BUCKET_TARGET = 120;
   const bucketCount = span < 1 ? 1 : Math.min(BUCKET_TARGET, Math.ceil(span));
   const interval = span / bucketCount || 1;
 
@@ -266,9 +308,9 @@ export function computeVolume() {
             END AS bucket,
             COALESCE(level, 'none') AS lvl,
             COUNT(*) AS cnt
-          FROM entries
+          FROM entries${where}
           GROUP BY bucket, lvl`,
-    bind: [minTs, interval, bucketCount, bucketCount, minTs, interval],
+    bind: [minTs, interval, bucketCount, bucketCount, minTs, interval, ...params],
     returnValue: "resultRows",
   });
 

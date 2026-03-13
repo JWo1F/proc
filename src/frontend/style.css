@@ -133,32 +133,11 @@
 
 /* Logs Volume */
 
-#logs-volume-bars {
-  display: flex;
-  align-items: flex-end;
-  gap: 1px;
-  height: 100%;
-}
-
-.logs-volume-bar {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-radius: 1px 1px 0 0;
-  opacity: 0.85;
-  transition: opacity 0.1s;
-  cursor: crosshair;
-}
-
-.logs-volume-bar:hover {
-  opacity: 1;
-}
-
 .logs-volume-tooltip {
   position: absolute;
   z-index: 50;
   background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(8px);
   color: #e2e8f0;
   border-radius: 6px;
   padding: 8px 10px;
@@ -166,25 +145,27 @@
   font-family: var(--font-mono);
   pointer-events: none;
   white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.1);
 }
 
 .logs-volume-tooltip-time {
   font-weight: 600;
   margin-bottom: 4px;
   color: #94a3b8;
+  letter-spacing: 0.02em;
 }
 
 .logs-volume-tooltip-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 1px 0;
+  padding: 1.5px 0;
 }
 
 .logs-volume-tooltip-dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 2px;
   flex-shrink: 0;
 }
@@ -192,12 +173,13 @@
 .logs-volume-tooltip-count {
   margin-left: auto;
   font-weight: 600;
+  padding-left: 12px;
 }
 
 .logs-volume-tooltip-total {
   margin-top: 4px;
   padding-top: 4px;
-  border-top: 1px solid rgba(148, 163, 184, 0.2);
+  border-top: 1px solid rgba(148, 163, 184, 0.15);
   font-weight: 600;
   color: #94a3b8;
 }

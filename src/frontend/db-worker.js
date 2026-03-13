@@ -175,7 +175,12 @@ function sendUpdate() {
   if (now - lastFullUpdate > 1000) {
     lastFullUpdate = now;
     cachedProcesses = getProcesses();
-    cachedVolume = computeVolume();
+    cachedVolume = computeVolume({
+      hiddenProcesses: filter.hiddenProcesses,
+      hiddenLevels: filter.hiddenLevels,
+      query: (!filter.regex && filter.query) || null,
+      activeTokens: filter.activeTokens,
+    });
     cachedDbSize = getDBSize();
   }
 
