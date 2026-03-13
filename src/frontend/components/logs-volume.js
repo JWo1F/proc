@@ -200,31 +200,48 @@ function drawTimeAxis(start, interval, n, w, h, padB) {
   ctx.font = `10px ${mono}`;
   ctx.textBaseline = "bottom";
 
-  const targetTicks = Math.max(2, Math.min(10, Math.floor(w / 90)));
+  // Measure a representative label to compute how many ticks fit
+  const sampleLabel = formatTimeShort(start, totalSpan);
+  const labelW = ctx.measureText(sampleLabel).width + 16; // 16px min gap
+  const targetTicks = Math.max(2, Math.min(10, Math.floor(w / labelW)));
   const niceInterval = niceTimeStep(totalSpan / targetTicks);
   const firstTick = Math.ceil(start / niceInterval) * niceInterval;
+
+  const minGap = 8; // minimum pixels between labels
+  let lastRight = -Infinity;
 
   for (let t = firstTick; t <= start + totalSpan; t += niceInterval) {
     const frac = (t - start) / totalSpan;
     const x = frac * w;
     if (x < 25 || x > w - 25) continue;
 
+    const label = formatTimeShort(t, totalSpan);
+    const tw = ctx.measureText(label).width;
+    const left = x - tw / 2;
+
+    // Skip if this label would overlap the previous one
+    if (left < lastRight + minGap) continue;
+
     ctx.fillStyle = isDark ? "#374151" : "#d1d5db";
     ctx.fillRect(x, h - padB + 1, 1, 4);
 
     ctx.fillStyle = isDark ? "#6b7280" : "#9ca3af";
-    const label = formatTimeShort(t, totalSpan);
-    const tw = ctx.measureText(label).width;
-    ctx.fillText(label, x - tw / 2, y);
+    ctx.fillText(label, left, y);
+    lastRight = left + tw;
   }
 }
 
 function niceTimeStep(raw) {
-  const steps = [0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+  const steps = [
+    0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30,     // sub-minute
+    60, 120, 300, 600, 900, 1800, 3600,         // minutes/hours
+    7200, 14400, 21600, 43200,                   // 2h, 4h, 6h, 12h
+    86400, 172800, 604800,                       // 1d, 2d, 7d
+  ];
   for (const s of steps) {
     if (s >= raw * 0.7) return s;
   }
-  return 3600;
+  return 604800;
 }
 
 function formatTime(unixSec, ms) {

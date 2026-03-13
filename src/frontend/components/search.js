@@ -130,11 +130,12 @@ function showHelp() {
 }
 
 export function initSearch() {
-  let searchTimeout = null;
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") applySearch();
+  });
 
-  searchInput.addEventListener("input", () => {
-    clearTimeout(searchTimeout);
-    searchTimeout = setTimeout(applySearch, 150);
+  searchInput.addEventListener("blur", () => {
+    applySearch();
   });
 
   searchClear.addEventListener("click", () => {

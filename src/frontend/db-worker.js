@@ -257,14 +257,18 @@ function runLoop() {
       tsLookup[entry.index] = entry.ts;
     }
 
-    // Inline filter matching with sorted insertion by (ts, idx)
-    for (const entry of batch) {
-      if (matchesEntry(entry)) {
-        const pos = sortedInsertPos(entry.ts, entry.index);
-        if (pos === filteredIndices.length) {
-          filteredIndices.push(entry.index);
-        } else {
-          filteredIndices.splice(pos, 0, entry.index);
+    // Inline filter matching with sorted insertion by (ts, idx).
+    // Skip when a text query is active — matchesEntry can't do FTS,
+    // so all entries would pass and show unfiltered until the rebuild.
+    if (!filter.query) {
+      for (const entry of batch) {
+        if (matchesEntry(entry)) {
+          const pos = sortedInsertPos(entry.ts, entry.index);
+          if (pos === filteredIndices.length) {
+            filteredIndices.push(entry.index);
+          } else {
+            filteredIndices.splice(pos, 0, entry.index);
+          }
         }
       }
     }

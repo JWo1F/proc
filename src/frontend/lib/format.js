@@ -14,7 +14,10 @@ export function formatTimestamp(unixSeconds, ms) {
 export function formatTimeShort(unixSec, totalSpan) {
   const d = new Date(unixSec * 1000);
   if (totalSpan < 60) return pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
-  return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  if (totalSpan < 86400) return pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  // Multi-day: show "Mar 13 HH:MM"
+  const mon = d.toLocaleString("en", { month: "short" });
+  return mon + " " + d.getDate() + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes());
 }
 
 export function fmtSize(bytes) {
