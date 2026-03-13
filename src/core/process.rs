@@ -76,13 +76,13 @@ impl Process {
   /// Send a Unix signal to the process group (negative PID) so that the child
   /// and all its descendants receive it. No-op if the process is not running.
   pub fn signal(&self, signal: Signal) {
-    if let Some(child) = &self.child {
-      if let Some(pid) = child.id() {
-        let gid = -(pid as i32);
+    if let Some(child) = &self.child
+      && let Some(pid) = child.id()
+    {
+      let gid = -(pid as i32);
 
-        if let Err(err) = nix::sys::signal::kill(nix::unistd::Pid::from_raw(gid), signal) {
-          eprintln!("Error sending signal to process {}: {}", pid, err);
-        }
+      if let Err(err) = nix::sys::signal::kill(nix::unistd::Pid::from_raw(gid), signal) {
+        eprintln!("Error sending signal to process {}: {}", pid, err);
       }
     }
   }

@@ -1,4 +1,5 @@
 import { on } from "../main.js";
+import { formatTimeShort, formatTimestamp } from "../lib/format.js";
 
 const LEVEL_COLORS_LIGHT = {
   fatal: "#dc2626",
@@ -226,19 +227,8 @@ function niceTimeStep(raw) {
   return 3600;
 }
 
-function formatTimeShort(unixSec, totalSpan) {
-  const d = new Date(unixSec * 1000);
-  const p = (n) => (n < 10 ? "0" : "") + n;
-  if (totalSpan < 60) return p(d.getMinutes()) + ":" + p(d.getSeconds());
-  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
-}
-
 function formatTime(unixSec, ms) {
-  const d = new Date(unixSec * 1000);
-  const p = (n) => (n < 10 ? "0" : "") + n;
-  const p3 = (n) => (n < 10 ? "00" : n < 100 ? "0" : "") + n;
-  const base = p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
-  return ms ? base + "." + p3(d.getMilliseconds()) : base;
+  return formatTimestamp(unixSec, ms);
 }
 
 function onMouseMove(e) {

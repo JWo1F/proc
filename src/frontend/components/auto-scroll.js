@@ -22,11 +22,6 @@ export function syncAutoScroll() {
 
 export function initAutoScroll() {
   let scrollDebounce = null;
-  let programmaticScroll = false;
-
-  window.__setProgrammaticScroll = (v) => {
-    programmaticScroll = v;
-  };
 
   autoscrollToggle.addEventListener("click", () => {
     ui.autoScroll = !ui.autoScroll;
@@ -35,29 +30,26 @@ export function initAutoScroll() {
   });
 
   logContainer.addEventListener("scroll", () => {
-    if (!programmaticScroll) {
-      const { scrollTop, scrollHeight, clientHeight } = logContainer;
-      const distFromBottom = scrollHeight - scrollTop - clientHeight;
-      if (distFromBottom > 40 && ui.autoScroll) {
-        ui.autoScroll = false;
-        updateAutoScrollBtn();
-      }
-      if (distFromBottom <= 1 && !ui.autoScroll) {
-        clearTimeout(scrollDebounce);
-        scrollDebounce = setTimeout(() => {
-          if (
-            logContainer.scrollHeight -
-              logContainer.scrollTop -
-              logContainer.clientHeight <=
-            1
-          ) {
-            ui.autoScroll = true;
-            updateAutoScrollBtn();
-          }
-        }, 150);
-      }
+    const { scrollTop, scrollHeight, clientHeight } = logContainer;
+    const distFromBottom = scrollHeight - scrollTop - clientHeight;
+    if (distFromBottom > 40 && ui.autoScroll) {
+      ui.autoScroll = false;
+      updateAutoScrollBtn();
     }
-    // renderVisible() already coalesces via scheduleRender/RAF
+    if (distFromBottom <= 1 && !ui.autoScroll) {
+      clearTimeout(scrollDebounce);
+      scrollDebounce = setTimeout(() => {
+        if (
+          logContainer.scrollHeight -
+            logContainer.scrollTop -
+            logContainer.clientHeight <=
+          1
+        ) {
+          ui.autoScroll = true;
+          updateAutoScrollBtn();
+        }
+      }, 150);
+    }
     renderVisible();
   });
 }

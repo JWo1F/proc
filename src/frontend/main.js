@@ -10,6 +10,8 @@ import { initVirtualScroll } from "./components/virtual-scroll.js";
 import { initTokenFilter } from "./components/token-filter.js";
 import { initHistory } from "./components/history.js";
 import { initLogsVolume } from "./components/logs-volume.js";
+import { initContextMenu } from "./components/context-menu.js";
+import { $ } from "./lib/dom.js";
 
 // ── Shared UI state ────────────────────────────────────────────────────
 
@@ -58,15 +60,12 @@ const ingestWorker = new Worker(new URL("./ingest-worker.js", import.meta.url), 
   type: "module",
 });
 
-// Wire both workers into the event bus
 dbWorker.onmessage = (e) => emit(e.data.type, e.data);
 ingestWorker.onmessage = (e) => emit(e.data.type, e.data);
 
-// Connect workers: MessageChannel for ingest -> db communication
 const channel = new MessageChannel();
 dbWorker.postMessage({ type: "initPort", port: channel.port2 }, [channel.port2]);
 
-// Initialize DB, then start ingest (one-shot: port can only be transferred once)
 let ingestStarted = false;
 on("ready", () => {
   if (ingestStarted) return;
@@ -86,6 +85,47 @@ on("update", (msg) => {
   ui.processes = new Map(msg.processes);
 });
 
+// ── Init event — set project name and page title ──────────────────────
+
+on("init", (msg) => {
+  ui.projectName = msg.name;
+  document.title = `Procfile: ${msg.name}`;
+  $("app-title").textContent = msg.name;
+  $("app-addr").textContent = location.host;
+});
+
+// ── Connection status badge ──────────────────────────────────────────
+
+on("connected", (msg) => {
+  const badge = $("status-badge");
+  if (msg.value) {
+    badge.className =
+      "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400";
+    badge.innerHTML =
+      '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span><span>connected</span>';
+  } else {
+    badge.className =
+      "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
+    badge.innerHTML =
+      '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span>disconnected</span>';
+  }
+});
+
+// ── Ingest stats ─────────────────────────────────────────────────────
+
+on("ingestStats", (msg) => {
+  const statRecv = $("stat-recv");
+  const statQueue = $("stat-queue");
+  statRecv.textContent = `recv: ${msg.received.toLocaleString()}`;
+  statRecv.classList.remove("hidden");
+  if (msg.queued > 0) {
+    statQueue.textContent = `queue: ${msg.queued.toLocaleString()}`;
+    statQueue.classList.remove("hidden");
+  } else {
+    statQueue.classList.add("hidden");
+  }
+});
+
 // ── Init ───────────────────────────────────────────────────────────────
 
 initTheme();
@@ -97,4 +137,5 @@ initDownloads();
 initTokenFilter();
 initLogsVolume();
 initVirtualScroll();
+initContextMenu();
 initHistory();

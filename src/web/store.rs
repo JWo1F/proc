@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use tokio::sync::broadcast;
 
 /// A registered process with its assigned ID and CSS color.
@@ -22,10 +22,11 @@ pub(super) struct LogEntry {
 }
 
 /// Thread-safe log store with pub/sub for SSE clients.
+/// Always used behind `Arc<LogStore>` — no inner Arcs needed.
 pub(super) struct LogStore {
-  entries: Arc<RwLock<Vec<LogEntry>>>,
-  processes: Arc<RwLock<Vec<ProcessInfo>>>,
-  process_map: Arc<RwLock<HashMap<String, usize>>>,
+  entries: RwLock<Vec<LogEntry>>,
+  processes: RwLock<Vec<ProcessInfo>>,
+  process_map: RwLock<HashMap<String, usize>>,
   counter: AtomicUsize,
   sender: broadcast::Sender<LogEntry>,
 }
@@ -34,9 +35,9 @@ impl LogStore {
   pub fn new() -> Self {
     let (sender, _) = broadcast::channel(1024);
     Self {
-      entries: Arc::new(RwLock::new(Vec::new())),
-      processes: Arc::new(RwLock::new(Vec::new())),
-      process_map: Arc::new(RwLock::new(HashMap::new())),
+      entries: RwLock::new(Vec::new()),
+      processes: RwLock::new(Vec::new()),
+      process_map: RwLock::new(HashMap::new()),
       counter: AtomicUsize::new(0),
       sender,
     }
@@ -44,10 +45,10 @@ impl LogStore {
 
   /// Register a process and return its ID. If already registered, returns existing ID.
   pub fn register_process(&self, name: &str, css_color: &str) -> usize {
-    if let Ok(map) = self.process_map.read() {
-      if let Some(&id) = map.get(name) {
-        return id;
-      }
+    if let Ok(map) = self.process_map.read()
+      && let Some(&id) = map.get(name)
+    {
+      return id;
     }
     let mut map = self.process_map.write().unwrap();
     // Double-check after acquiring write lock

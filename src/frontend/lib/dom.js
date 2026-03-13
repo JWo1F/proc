@@ -6,7 +6,6 @@ export const logViewport = $("log-viewport");
 export const logContainer = $("log-container");
 export const emptyState = $("empty-state");
 export const logCountEl = $("log-count");
-export const statusBadge = $("status-badge");
 export const filterCount = $("filter-count");
 export const statRecv = $("stat-recv");
 export const statQueue = $("stat-queue");

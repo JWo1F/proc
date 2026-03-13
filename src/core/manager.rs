@@ -202,10 +202,10 @@ impl ProcessManager {
 
     Self::spawn_reader(id, reader, self.tx.clone());
 
-    if let Some(proc) = self.processes.get(&id) {
-      if let Some(pid) = proc.pid() {
-        self.emit_system(proc, &format!("Spawned, pid: {}", pid));
-      }
+    if let Some(proc) = self.processes.get(&id)
+      && let Some(pid) = proc.pid()
+    {
+      self.emit_system(proc, &format!("Spawned, pid: {}", pid));
     }
 
     Ok(())

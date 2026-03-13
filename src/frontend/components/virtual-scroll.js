@@ -14,20 +14,12 @@ import {
   logCountEl,
   filterCount,
   downloadFiltered,
-  statRecv,
-  statQueue,
   statIndexed,
   statDbSize,
 } from "../lib/dom.js";
+import { fmtSize } from "../lib/format.js";
 import { updateAutoScrollBtn, syncAutoScroll } from "./auto-scroll.js";
 import { clearAllFilters } from "./search.js";
-
-function fmtSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + " MB";
-  return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB";
-}
 
 const LEVEL_LETTERS = {
   debug: "D",
@@ -41,11 +33,11 @@ const OVERSCAN = 50;
 
 // ── Cache ─────────────────────────────────────────────────────────────
 
-const entryCache = new Map(); // filteredIndex → entry
-const expandedLines = new Set(); // raw log indices of expanded lines
+export const entryCache = new Map(); // filteredIndex → entry
+export const expandedLines = new Set(); // raw log indices of expanded lines
 let lastFilterVersion = -1;
 let pendingKey = null;
-let pendingScrollRestore = null; // { scrollTop, scrollLeft } to apply after next filter update
+let pendingScrollRestore = null;
 
 // ── DOM ───────────────────────────────────────────────────────────────
 
@@ -55,10 +47,25 @@ let baseOpts = null;
 let rendering = false;
 let needsRerender = false;
 let renderScheduled = false;
-let measureAll = false; // set on expand/collapse to remeasure all visible elements
-let lastRenderKey = ""; // tracks what's in the DOM to skip unnecessary rebuilds
-let selectedRawIndex = -1; // raw log index of the selected (highlighted) line
-let pendingScrollToRaw = -1; // raw index to scroll to after filters clear
+let measureAll = false;
+let lastRenderKey = "";
+let selectedRawIndex = -1;
+let pendingScrollToRaw = -1;
+
+// ── Expand/collapse toggle ────────────────────────────────────────────
+
+export function toggleExpand(rawIndex) {
+  if (expandedLines.has(rawIndex)) {
+    expandedLines.delete(rawIndex);
+  } else {
+    expandedLines.add(rawIndex);
+  }
+  ui.autoScroll = false;
+  updateAutoScrollBtn();
+  measureAll = true;
+  lastRenderKey = "";
+  render();
+}
 
 // ── Log element factory ───────────────────────────────────────────────
 
@@ -112,23 +119,12 @@ function createLogElement(entry, sortedPos) {
 
   idx.addEventListener("click", (e) => {
     e.stopPropagation();
-    if (expandedLines.has(entry.index)) {
-      expandedLines.delete(entry.index);
-    } else {
-      expandedLines.add(entry.index);
-    }
-    // Stop auto-scroll so the line stays visible during heavy input
-    ui.autoScroll = false;
-    updateAutoScrollBtn();
-    measureAll = true;
-    lastRenderKey = "";
-    render();
+    toggleExpand(entry.index);
   });
 
   ts.addEventListener("click", (e) => {
     e.stopPropagation();
     if (selectedRawIndex === entry.index) {
-      // Deselect
       selectedRawIndex = -1;
       lastRenderKey = "";
       render();
@@ -137,7 +133,6 @@ function createLogElement(entry, sortedPos) {
     selectedRawIndex = entry.index;
     ui.autoScroll = false;
     updateAutoScrollBtn();
-    // Clear all filters so raw index == filtered index, then scroll
     pendingScrollToRaw = entry.index;
     clearAllFilters();
     renderAllLogs();
@@ -171,7 +166,6 @@ function updateCounts() {
 
 // ── Render ─────────────────────────────────────────────────────────────
 
-// Coalesce multiple render triggers into a single RAF.
 function scheduleRender() {
   if (renderScheduled) return;
   renderScheduled = true;
@@ -182,8 +176,6 @@ function scheduleRender() {
 }
 
 function render() {
-  // Re-entrancy guard: measureElement → notify → onChange → render
-  // Defer until measurement pass completes, then re-render once.
   if (rendering) {
     needsRerender = true;
     return;
@@ -201,7 +193,6 @@ function render() {
     return;
   }
 
-  // Determine missing entries and request from worker
   let missStart = -1;
   let missEnd = -1;
   for (const item of items) {
@@ -224,8 +215,6 @@ function render() {
     }
   }
 
-  // Build a render key to skip DOM rebuild when nothing visible has changed.
-  // Includes index, position, cache presence, and expand state.
   let renderKey = `sel:${selectedRawIndex};`;
   for (const item of items) {
     const entry = entryCache.get(item.index);
@@ -239,7 +228,6 @@ function render() {
   }
   lastRenderKey = renderKey;
 
-  // Render cached items
   const frag = document.createDocumentFragment();
   let hasExpanded = false;
   for (const item of items) {
@@ -252,8 +240,6 @@ function render() {
     if (expandedLines.has(entry.index)) hasExpanded = true;
   }
 
-  // If no cached entries matched (all cache misses), keep old content
-  // visible until the worker responds with the batch.
   if (frag.childNodes.length === 0) {
     lastRenderKey = "";
     return;
@@ -262,9 +248,6 @@ function render() {
   contentEl.innerHTML = "";
   contentEl.appendChild(frag);
 
-  // measureAll: after expand/collapse click, measure all visible elements so
-  // the virtualizer picks up both new expanded heights and collapsed-back-to-default.
-  // Otherwise only measure when expanded lines are visible (skip during normal scroll).
   if (measureAll || hasExpanded) {
     rendering = true;
     for (const el of [...contentEl.children]) {
@@ -309,7 +292,6 @@ export function scheduleScrollRestore(scrollTop, scrollLeft) {
   pendingScrollRestore = { scrollTop, scrollLeft };
 }
 
-// Called by auto-scroll on scroll events
 export function renderVisible() {
   scheduleRender();
 }
@@ -355,18 +337,6 @@ export function initVirtualScroll() {
     scheduleRender();
   });
 
-  // Ingest stats
-  on("ingestStats", (msg) => {
-    statRecv.textContent = `recv: ${msg.received.toLocaleString()}`;
-    statRecv.classList.remove("hidden");
-    if (msg.queued > 0) {
-      statQueue.textContent = `queue: ${msg.queued.toLocaleString()}`;
-      statQueue.classList.remove("hidden");
-    } else {
-      statQueue.classList.add("hidden");
-    }
-  });
-
   // Data update from worker
   on("update", (msg) => {
     let filterChanged = false;
@@ -396,7 +366,6 @@ export function initVirtualScroll() {
     emptyState.classList.toggle("hidden", ui.totalLogs > 0);
     updateCounts();
 
-    // After filters clear, ask worker for the sorted position of the target line
     if (pendingScrollToRaw >= 0 && filterChanged) {
       ui.dbWorker.postMessage({ type: "findPosition", rawIndex: pendingScrollToRaw });
       pendingScrollToRaw = -1;
@@ -425,29 +394,4 @@ export function initVirtualScroll() {
       scheduleRender();
     }
   });
-
-  // Init event
-  on("init", (msg) => {
-    ui.projectName = msg.name;
-    document.title = `Procfile: ${msg.name}`;
-    document.getElementById("app-title").textContent = msg.name;
-    document.getElementById("app-addr").textContent = location.host;
-  });
-
-  // Connection status
-  on("connected", (msg) => {
-    const badge = document.getElementById("status-badge");
-    if (msg.value) {
-      badge.className =
-        "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400";
-      badge.innerHTML =
-        '<span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span><span>connected</span>';
-    } else {
-      badge.className =
-        "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400";
-      badge.innerHTML =
-        '<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span>disconnected</span>';
-    }
-  });
-
 }

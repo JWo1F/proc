@@ -72,6 +72,8 @@ function parseLineTimestamp(plain) {
 // ── SSE connection ──────────────────────────────────────────────────
 
 let eventSource = null;
+let backoff = 1000;
+const MAX_BACKOFF = 30000;
 
 function connect() {
   if (eventSource) eventSource.close();
@@ -140,12 +142,16 @@ function connect() {
   });
 
   eventSource.addEventListener("open", () => {
+    backoff = 1000;
     self.postMessage({ type: "connected", value: true });
   });
 
   eventSource.addEventListener("error", () => {
     self.postMessage({ type: "connected", value: false });
     eventSource.close();
+    const delay = backoff + Math.random() * 500;
+    backoff = Math.min(backoff * 2, MAX_BACKOFF);
+    setTimeout(connect, delay);
   });
 }
 

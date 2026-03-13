@@ -5,9 +5,7 @@
 // Patterns are applied in priority order; higher-priority matches
 // prevent lower-priority ones from overlapping the same text.
 
-function escapeAttr(s) {
-  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
-}
+import { escapeAttr } from "./html.js";
 
 // Token patterns in priority order.  Each entry:
 //   re    — regex (must use /g or /gi flag)

@@ -11,6 +11,7 @@ import {
 import { ansiToHtml } from "./lib/ansi.js";
 import { linkifyHtml } from "./lib/linkify.js";
 import { tokenifyHtml } from "./lib/tokens.js";
+import { formatTimestamp } from "./lib/format.js";
 
 const FTS_CHUNK = 500;
 
@@ -41,17 +42,6 @@ let filterVersion = 0;
 let rebuildVersion = 0;
 
 // ── Entry rendering ─────────────────────────────────────────────────
-
-const pad2 = (n) => (n < 10 ? "0" : "") + n;
-const pad3 = (n) => (n < 10 ? "00" : n < 100 ? "0" : "") + n;
-
-function formatTimestamp(unixSeconds, ms) {
-  const d = new Date(unixSeconds * 1000);
-  const base =
-    pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
-  if (ms) return base + "." + pad3(d.getMilliseconds());
-  return base;
-}
 
 function renderEntry(stored) {
   const html = tokenifyHtml(linkifyHtml(ansiToHtml(stored.raw)));

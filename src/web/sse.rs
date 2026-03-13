@@ -118,10 +118,10 @@ pub(super) async fn handler(
   // Live stream, skipping entries already covered by replay.
   let live = BroadcastStream::new(rx).filter_map(move |result| {
     result.ok().and_then(|entry| {
-      if let Some(last) = last_index {
-        if entry.index <= last {
-          return None;
-        }
+      if let Some(last) = last_index
+        && entry.index <= last
+      {
+        return None;
       }
       Some(entry_to_sse(&entry))
     })

@@ -2,9 +2,7 @@
 // across all processes. Manages the filter bar and click handling.
 
 import { ui } from "../main.js";
-import { sendFilter } from "./search.js";
-import { renderAllLogs } from "./virtual-scroll.js";
-import { pushHistory } from "./history.js";
+import { toggleFilter, clearFilter } from "../lib/filter-set.js";
 import {
   tokenFilterBar,
   tokenFilterTags,
@@ -34,7 +32,7 @@ export function renderTokenBar() {
     close.innerHTML = "&#x2715;";
     close.addEventListener("click", (e) => {
       e.stopPropagation();
-      toggleToken(token);
+      toggleFilter(ui.activeTokens, token, renderTokenBar);
     });
 
     tag.appendChild(label);
@@ -43,34 +41,16 @@ export function renderTokenBar() {
   }
 }
 
-function toggleToken(token) {
-  if (ui.activeTokens.has(token)) {
-    ui.activeTokens.delete(token);
-  } else {
-    ui.activeTokens.add(token);
-  }
-  renderTokenBar();
-  sendFilter();
-  renderAllLogs();
-  pushHistory();
-}
-
 export function initTokenFilter() {
-  // Event delegation for token clicks in log lines
   logViewport.addEventListener("click", (e) => {
     const span = e.target.closest(".log-token");
     if (!span) return;
     e.stopPropagation();
     const token = span.dataset.token;
-    if (token) toggleToken(token);
+    if (token) toggleFilter(ui.activeTokens, token, renderTokenBar);
   });
 
-  // Clear all tokens
   tokenFilterClear.addEventListener("click", () => {
-    ui.activeTokens.clear();
-    renderTokenBar();
-    sendFilter();
-    renderAllLogs();
-    pushHistory();
+    clearFilter(ui.activeTokens, renderTokenBar);
   });
 }

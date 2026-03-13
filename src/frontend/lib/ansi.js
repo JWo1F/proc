@@ -1,5 +1,7 @@
 // ANSI escape code parser — converts terminal color codes to HTML spans.
 
+import { escapeHtml, escapeAttr } from "./html.js";
+
 const STANDARD = [
   "#4e4e4e",
   "#cd3131",
@@ -40,18 +42,6 @@ function sgrToColor(params) {
   if (p.length === 1 && p[0] >= 30 && p[0] <= 37) return STANDARD[p[0] - 30];
   if (p.length === 1 && p[0] >= 90 && p[0] <= 97) return BRIGHT[p[0] - 90];
   return null;
-}
-
-function escapeHtml(ch) {
-  if (ch === "&") return "&amp;";
-  if (ch === "<") return "&lt;";
-  if (ch === ">") return "&gt;";
-  if (ch === '"') return "&quot;";
-  return ch;
-}
-
-function escapeAttr(s) {
-  return s.replace(/[&"<>]/g, escapeHtml);
 }
 
 // Parse OSC 8 hyperlink at position i. Returns { url, end } or null.
