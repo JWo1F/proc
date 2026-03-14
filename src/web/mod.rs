@@ -1,4 +1,3 @@
-mod assets;
 mod sse;
 mod store;
 
@@ -76,7 +75,7 @@ pub fn port_for_cwd() -> u16 {
   PORT_RANGE_START + (hash % range) as u16
 }
 
-/// Start the web module: spawns a log consumer task and the HTTP server.
+/// Start the web module: spawns a log consumer task and the SSE server.
 pub async fn start(rx: broadcast::Receiver<LogEvent>, port: u16, no_system: bool) {
   let store = Arc::new(LogStore::new());
 
@@ -86,15 +85,10 @@ pub async fn start(rx: broadcast::Receiver<LogEvent>, port: u16, no_system: bool
 
   let app = Router::new()
     .route("/api/sse", get(sse::handler))
-    .fallback(assets::handler)
     .with_state(store)
     .layer(SetResponseHeaderLayer::overriding(
-      HeaderName::from_static("cross-origin-opener-policy"),
-      HeaderValue::from_static("same-origin"),
-    ))
-    .layer(SetResponseHeaderLayer::overriding(
-      HeaderName::from_static("cross-origin-embedder-policy"),
-      HeaderValue::from_static("credentialless"),
+      HeaderName::from_static("access-control-allow-origin"),
+      HeaderValue::from_static("*"),
     ));
 
   let mut current = port;
@@ -107,7 +101,7 @@ pub async fn start(rx: broadcast::Receiver<LogEvent>, port: u16, no_system: bool
       }
       Err(err) => {
         eprintln!(
-          "Failed to bind web server after {} attempts: {}",
+          "Failed to bind SSE server after {} attempts: {}",
           PORT_RETRY_LIMIT, err
         );
         return;
@@ -116,9 +110,9 @@ pub async fn start(rx: broadcast::Receiver<LogEvent>, port: u16, no_system: bool
   };
 
   let addr = listener.local_addr().expect("listener has local addr");
-  eprintln!("Web UI available at http://{}", addr);
+  eprintln!("SSE endpoint: http://{}/api/sse", addr);
 
   if let Err(err) = axum::serve(listener, app).await {
-    eprintln!("Web server error: {}", err);
+    eprintln!("SSE server error: {}", err);
   }
 }

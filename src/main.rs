@@ -54,7 +54,7 @@ struct RunOptions {
   #[arg(long)]
   no_system: bool,
 
-  /// Start web UI (optional port, default: derived from folder name)
+  /// Start SSE server (optional port, default: derived from folder name)
   #[cfg(feature = "web")]
   #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "0")]
   web: Option<u16>,
@@ -306,7 +306,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     if let Some(handle) = stdout_handle {
       let _ = handle.await;
     }
-    eprintln!("Web UI still running. Press Ctrl+C to quit.");
+    eprintln!("SSE server still running. Press Ctrl+C to quit.");
     let _ = tokio::signal::ctrl_c().await;
     return code.into();
   }
