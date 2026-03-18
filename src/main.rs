@@ -15,6 +15,7 @@ use tokio::sync::broadcast;
 
 mod core;
 mod pipe;
+mod input;
 mod stdout;
 #[cfg(feature = "web")]
 mod web;

@@ -23,6 +23,10 @@ pub struct Process {
   pub(crate) color: Color,
   /// Number of consecutive restarts (used for linear backoff).
   restart_attempts: u32,
+  /// Set by the `restart` command — bypasses backoff on next exit.
+  pub(crate) pending_restart: bool,
+  /// Set by the `remove` command — skips all mode logic on exit.
+  pub(crate) removed: bool,
 }
 
 impl Process {
@@ -33,6 +37,8 @@ impl Process {
       child: None,
       color,
       restart_attempts: 0,
+      pending_restart: false,
+      removed: false,
     }
   }
 
@@ -66,6 +72,11 @@ impl Process {
     self.restart_attempts = self.restart_attempts.saturating_add(1);
 
     Duration::from_millis(delay_ms)
+  }
+
+  /// Reset the restart backoff counter to zero.
+  pub fn reset_restart_counter(&mut self) {
+    self.restart_attempts = 0;
   }
 
   /// Whether a child process is currently running.
@@ -132,5 +143,21 @@ mod tests {
 
     let capped = process.next_restart_delay();
     assert_eq!(capped, Duration::from_millis(RESTART_MAX_DELAY_MS));
+  }
+
+  #[test]
+  fn reset_restart_counter_resets_to_zero() {
+    let mut process = Process::new("web", "echo hi", Color::Blue);
+
+    // Build up some restart attempts
+    process.next_restart_delay();
+    process.next_restart_delay();
+    process.next_restart_delay();
+
+    process.reset_restart_counter();
+
+    // After reset, first delay should be base delay again
+    let delay = process.next_restart_delay();
+    assert_eq!(delay, Duration::from_millis(RESTART_DELAY_MS));
   }
 }
