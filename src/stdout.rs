@@ -4,9 +4,10 @@ use crossterm::{cursor, execute, terminal};
 use std::io::{Write, stdout};
 use tokio::sync::{broadcast, watch};
 
+use crate::input::PROMPT;
+
 const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
 const COMPACT_INDICATOR: &str = "▌";
-const PROMPT: &str = "> ";
 
 pub struct StdoutConfig {
   pub timestamps: bool,
@@ -45,7 +46,7 @@ pub async fn run(mut rx: broadcast::Receiver<LogEvent>, mut config: StdoutConfig
             cursor::MoveToColumn(0),
             terminal::Clear(terminal::ClearType::CurrentLine),
           );
-          let _ = writeln!(out, "{}", line);
+          let _ = write!(out, "{}\r\n", line);
           let _ = write!(out, "{}{}", PROMPT, buffer);
           let _ = out.flush();
         } else {
@@ -66,7 +67,7 @@ pub async fn run(mut rx: broadcast::Receiver<LogEvent>, mut config: StdoutConfig
             cursor::MoveToColumn(0),
             terminal::Clear(terminal::ClearType::CurrentLine),
           );
-          let _ = writeln!(out, "Warning: stdout dropped {} log events", n);
+          let _ = write!(out, "Warning: stdout dropped {} log events\r\n", n);
           let _ = write!(out, "{}{}", PROMPT, buffer);
           let _ = out.flush();
         } else {

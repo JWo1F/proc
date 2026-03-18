@@ -367,6 +367,31 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     return code.into();
   }
 
+  if interactive {
+    // Close broadcast so stdout consumer drains remaining messages then exits.
+    drop(log_tx);
+    if let Some(handle) = stdout_handle {
+      // Give stdout a moment to flush final messages (Stopped, etc.),
+      // but don't wait forever — the input task's spawn_blocking holds a thread.
+      let _ = tokio::time::timeout(std::time::Duration::from_millis(100), handle).await;
+    }
+    const FAREWELLS: &[&str] = &[
+      "All processes down. Until next time!",
+      "Clean shutdown. Go grab a coffee.",
+      "Nothing left running. See you around!",
+      "Processes stopped. Have a great one!",
+      "That's a wrap. Happy coding!",
+      "All quiet on the process front.",
+      "Signed off. Catch you later!",
+      "Everything's tucked in. Goodnight!",
+      "Done and dusted. Take it easy!",
+      "Fin. May your deploys be boring.",
+    ];
+    let idx = (std::process::id() as usize) % FAREWELLS.len();
+    print!("\r{}{}\r\n", input::PROMPT, FAREWELLS[idx]);
+    std::process::exit(code as i32);
+  }
+
   drop(log_tx);
 
   if let Some(handle) = stdout_handle {

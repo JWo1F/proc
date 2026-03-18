@@ -11,8 +11,9 @@ use tokio::sync::{broadcast, mpsc, watch};
 pub enum Command {
     Kill(String),
     Restart(String),
-    Add(String, String),
-    Remove(String),
+    Run(String, String),
+    Up(String),
+    Down(String),
     List,
     Help,
 }
@@ -48,22 +49,28 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
             }
             Ok(Command::Restart(rest.to_string()))
         }
-        "add" => {
+        "run" => {
             let Some((name, cmd)) = rest.split_once(':') else {
-                return Err("Usage: add <name>: <command>".to_string());
+                return Err("Usage: run <name>: <command>".to_string());
             };
             let name = name.trim();
             let cmd = cmd.trim();
             if name.is_empty() || cmd.is_empty() {
-                return Err("Usage: add <name>: <command>".to_string());
+                return Err("Usage: run <name>: <command>".to_string());
             }
-            Ok(Command::Add(name.to_string(), cmd.to_string()))
+            Ok(Command::Run(name.to_string(), cmd.to_string()))
         }
-        "remove" => {
+        "up" => {
             if rest.is_empty() {
-                return Err("Usage: remove <name>".to_string());
+                return Err("Usage: up <name>".to_string());
             }
-            Ok(Command::Remove(rest.to_string()))
+            Ok(Command::Up(rest.to_string()))
+        }
+        "down" => {
+            if rest.is_empty() {
+                return Err("Usage: down <name>".to_string());
+            }
+            Ok(Command::Down(rest.to_string()))
         }
         "list" | "ps" => Ok(Command::List),
         "help" => Ok(Command::Help),
@@ -71,7 +78,7 @@ pub fn parse_command(input: &str) -> Result<Command, String> {
     }
 }
 
-const PROMPT: &str = "> ";
+pub const PROMPT: &str = "procfile> ";
 
 /// RAII guard that enables raw mode on creation and restores on drop.
 pub struct RawModeGuard;
@@ -128,8 +135,9 @@ fn emit_help(log_tx: &broadcast::Sender<LogEvent>) {
         "Available commands:",
         "  kill <name>           Send SIGINT to a process",
         "  restart <name>        Kill and re-spawn a process",
-        "  add <name>: <command> Add and start a new process",
-        "  remove <name>         Kill and remove a process",
+        "  run <name>: <command> Add and start a new process",
+        "  up <name>             Start a stopped process",
+        "  down <name>           Stop and remove a process",
         "  list                  Show running processes",
         "  help                  Show this help",
     ];
@@ -152,6 +160,9 @@ pub async fn run(
 ) {
     let mut buffer = String::new();
     let mut showing_error = false;
+    let mut history: Vec<String> = Vec::new();
+    let mut history_pos: Option<usize> = None; // None = typing new input
+    let mut saved_input = String::new(); // saves current input when browsing history
 
     draw_prompt(&buffer);
 
@@ -196,10 +207,51 @@ pub async fn run(
                 let _ = buffer_tx.send(buffer.clone());
                 draw_prompt(&buffer);
             }
+            (KeyCode::Up, _) => {
+                if history.is_empty() {
+                    continue;
+                }
+                match history_pos {
+                    None => {
+                        saved_input = buffer.clone();
+                        history_pos = Some(history.len() - 1);
+                    }
+                    Some(pos) if pos > 0 => {
+                        history_pos = Some(pos - 1);
+                    }
+                    _ => continue,
+                }
+                buffer = history[history_pos.unwrap()].clone();
+                let _ = buffer_tx.send(buffer.clone());
+                draw_prompt(&buffer);
+            }
+            (KeyCode::Down, _) => {
+                let Some(pos) = history_pos else {
+                    continue;
+                };
+                if pos + 1 < history.len() {
+                    history_pos = Some(pos + 1);
+                    buffer = history[pos + 1].clone();
+                } else {
+                    history_pos = None;
+                    buffer = saved_input.clone();
+                }
+                let _ = buffer_tx.send(buffer.clone());
+                draw_prompt(&buffer);
+            }
             (KeyCode::Enter, _) => {
                 let input = buffer.clone();
                 buffer.clear();
+                history_pos = None;
+                saved_input.clear();
                 let _ = buffer_tx.send(buffer.clone());
+
+                if !input.trim().is_empty() {
+                    // Don't add duplicates of the last entry
+                    if history.last().map(|h| h.as_str()) != Some(input.trim()) {
+                        history.push(input.trim().to_string());
+                    }
+                }
 
                 match parse_command(&input) {
                     Ok(Command::Help) => {
@@ -240,21 +292,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_add_with_colon() {
+    fn parse_run_with_colon() {
         assert_eq!(
-            parse_command("add worker: bundle exec sidekiq"),
-            Ok(Command::Add("worker".to_string(), "bundle exec sidekiq".to_string()))
+            parse_command("run worker: bundle exec sidekiq"),
+            Ok(Command::Run("worker".to_string(), "bundle exec sidekiq".to_string()))
         );
     }
 
     #[test]
-    fn parse_add_missing_colon() {
-        assert!(parse_command("add worker").is_err());
+    fn parse_run_missing_colon() {
+        assert!(parse_command("run worker").is_err());
     }
 
     #[test]
-    fn parse_remove() {
-        assert_eq!(parse_command("remove web"), Ok(Command::Remove("web".to_string())));
+    fn parse_up() {
+        assert_eq!(parse_command("up web"), Ok(Command::Up("web".to_string())));
+    }
+
+    #[test]
+    fn parse_down() {
+        assert_eq!(parse_command("down web"), Ok(Command::Down("web".to_string())));
     }
 
     #[test]

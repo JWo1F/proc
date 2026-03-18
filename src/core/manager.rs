@@ -282,7 +282,7 @@ impl ProcessManager {
           }
         }
       }
-      input::Command::Add(name, cmd) => {
+      input::Command::Run(name, cmd) => {
         if self.find_by_name(&name).is_some() {
           self.emit_error(&format!("Process already exists: {}", name));
           return;
@@ -304,32 +304,44 @@ impl ProcessManager {
           self.processes.remove(&id);
         }
       }
-      input::Command::Remove(name) => {
+      input::Command::Up(name) => {
         let Some(id) = self.find_by_name(&name) else {
           self.emit_error(&format!("Unknown process: {}", name));
           return;
         };
-        let running = if let Some(proc) = self.processes.get_mut(&id) {
+        if self.processes.get(&id).is_some_and(|p| p.is_running()) {
+          if let Some(proc) = self.processes.get(&id) {
+            self.emit_system(proc, "Already running");
+          }
+          return;
+        }
+        if let Some(proc) = self.processes.get_mut(&id) {
+          proc.removed = false;
+        }
+        if let Err(err) = self.start_one(id) {
+          self.emit_error(&format!("Failed to start {}: {}", name, err));
+        }
+      }
+      input::Command::Down(name) => {
+        let Some(id) = self.find_by_name(&name) else {
+          self.emit_error(&format!("Unknown process: {}", name));
+          return;
+        };
+        let running = self.processes.get(&id).is_some_and(|p| p.is_running());
+        if let Some(proc) = self.processes.get_mut(&id) {
           proc.removed = true;
-          let running = proc.is_running();
-          if running {
+        }
+        if running {
+          if let Some(proc) = self.processes.get(&id) {
             if let Err(err) = proc.signal(Signal::SIGINT) {
               self.emit_error(&err);
             }
-          }
-          running
-        } else {
-          return;
-        };
-        if running {
-          if let Some(proc) = self.processes.get(&id) {
-            self.emit_system(proc, "Removing...");
+            self.emit_system(proc, "Stopping...");
           }
         } else {
           if let Some(proc) = self.processes.get(&id) {
-            self.emit_system(proc, "Removed");
+            self.emit_system(proc, "Already stopped");
           }
-          self.processes.remove(&id);
         }
       }
       input::Command::List => {
@@ -427,12 +439,11 @@ impl ProcessManager {
       (exit_success, exit_message)
     };
 
-    // Check removed flag — skip all mode logic
+    // Check removed flag — skip all mode logic, keep process in map for `up`
     if let Some(proc) = self.processes.get(&id)
       && proc.removed
     {
-      self.emit_system(proc, "Removed");
-      self.processes.remove(&id);
+      self.emit_system(proc, "Stopped");
       return;
     }
 
