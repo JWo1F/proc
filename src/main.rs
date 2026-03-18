@@ -300,7 +300,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
   #[cfg(feature = "web")]
   maybe_spawn_web(&start, &log_tx);
 
-  let code = manager.start().await;
+  let code = manager.start(false).await;
   drop(manager);
 
   #[cfg(feature = "web")]

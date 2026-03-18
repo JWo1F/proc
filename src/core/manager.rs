@@ -2,6 +2,7 @@ use super::ansi;
 use super::color::color_for_index;
 use super::process::Process;
 use super::LogEvent;
+use crate::input;
 use clap::ValueEnum;
 use nix::sys::signal::Signal;
 use pty_process::Pty;
@@ -49,6 +50,8 @@ enum Event {
   CtrlC,
   /// Grace period expired — time to SIGKILL remaining processes.
   ForceKill,
+  /// An interactive command from the user.
+  Command(input::Command),
 }
 
 /// Owns all child processes and drives the main event loop.
@@ -72,6 +75,12 @@ pub struct ProcessManager {
   shutting_down: bool,
   /// Broadcast channel for log consumers (stdout, web).
   log_tx: broadcast::Sender<LogEvent>,
+  /// Next process ID for dynamically added processes.
+  next_id: usize,
+  /// Optional receiver for input events (interactive mode).
+  input_rx: Option<mpsc::UnboundedReceiver<input::InputEvent>>,
+  /// Optional watch sender for name_width updates.
+  name_width_tx: Option<tokio::sync::watch::Sender<usize>>,
 }
 
 impl ProcessManager {
@@ -103,12 +112,47 @@ impl ProcessManager {
       failed: false,
       shutting_down: false,
       log_tx,
+      next_id: entries.len(),
+      input_rx: None,
+      name_width_tx: None,
     })
   }
 
   /// Longest process name length (for stdout alignment).
   pub fn name_width(&self) -> usize {
     self.name_width
+  }
+
+  /// Set the input event receiver for interactive mode.
+  pub fn set_input_rx(&mut self, rx: mpsc::UnboundedReceiver<input::InputEvent>) {
+    self.input_rx = Some(rx);
+  }
+
+  /// Create a watch channel for name_width and return the receiver.
+  pub fn name_width_watch(&mut self) -> tokio::sync::watch::Receiver<usize> {
+    let (tx, rx) = tokio::sync::watch::channel(self.name_width);
+    self.name_width_tx = Some(tx);
+    rx
+  }
+
+  /// Find a process ID by name.
+  fn find_by_name(&self, name: &str) -> Option<usize> {
+    self.processes.iter().find(|(_, p)| p.name == name).map(|(id, _)| *id)
+  }
+
+  /// Emit an error message through the broadcast channel (for interactive mode)
+  /// or to stderr (for non-interactive mode).
+  fn emit_error(&self, message: &str) {
+    if self.name_width_tx.is_some() {
+      let _ = self.log_tx.send(LogEvent {
+        process: "system".to_string(),
+        color: colored::Color::Red,
+        line: message.to_string(),
+        system: true,
+      });
+    } else {
+      eprintln!("{}", message);
+    }
   }
 
   /// Read lines from a PTY and forward them as `Event::Line` / `Event::ProcessEnded`.
@@ -190,6 +234,114 @@ impl ProcessManager {
     self.emit(proc, &format!("[{}] {}", proc.name, message), true);
   }
 
+  fn handle_command(&mut self, cmd: input::Command) {
+    match cmd {
+      input::Command::Kill(name) => {
+        let Some(id) = self.find_by_name(&name) else {
+          self.emit_error(&format!("Unknown process: {}", name));
+          return;
+        };
+        if let Some(proc) = self.processes.get(&id) {
+          if proc.is_running() {
+            proc.signal(Signal::SIGINT);
+            self.emit_system(proc, "Killing...");
+          } else {
+            self.emit_system(proc, "Not running");
+          }
+        }
+      }
+      input::Command::Restart(name) => {
+        let Some(id) = self.find_by_name(&name) else {
+          self.emit_error(&format!("Unknown process: {}", name));
+          return;
+        };
+        let running = if let Some(proc) = self.processes.get_mut(&id) {
+          proc.pending_restart = true;
+          proc.reset_restart_counter();
+          let running = proc.is_running();
+          if running {
+            proc.signal(Signal::SIGINT);
+          } else {
+            proc.pending_restart = false;
+          }
+          running
+        } else {
+          return;
+        };
+        if running {
+          if let Some(proc) = self.processes.get(&id) {
+            self.emit_system(proc, "Restarting...");
+          }
+        } else {
+          if let Err(err) = self.start_one(id) {
+            self.emit_error(&format!("Failed to restart {}: {}", name, err));
+          }
+        }
+      }
+      input::Command::Add(name, cmd) => {
+        if self.find_by_name(&name).is_some() {
+          self.emit_error(&format!("Process already exists: {}", name));
+          return;
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        let process = Process::new(&name, &cmd, color_for_index(id));
+        self.processes.insert(id, process);
+
+        if name.len() > self.name_width {
+          self.name_width = name.len();
+          if let Some(ref tx) = self.name_width_tx {
+            let _ = tx.send(self.name_width);
+          }
+        }
+
+        if let Err(err) = self.start_one(id) {
+          self.emit_error(&format!("Failed to start {}: {}", name, err));
+          self.processes.remove(&id);
+        }
+      }
+      input::Command::Remove(name) => {
+        let Some(id) = self.find_by_name(&name) else {
+          self.emit_error(&format!("Unknown process: {}", name));
+          return;
+        };
+        let running = if let Some(proc) = self.processes.get_mut(&id) {
+          proc.removed = true;
+          let running = proc.is_running();
+          if running {
+            proc.signal(Signal::SIGINT);
+          }
+          running
+        } else {
+          return;
+        };
+        if running {
+          if let Some(proc) = self.processes.get(&id) {
+            self.emit_system(proc, "Removing...");
+          }
+        } else {
+          if let Some(proc) = self.processes.get(&id) {
+            self.emit_system(proc, "Removed");
+          }
+          self.processes.remove(&id);
+        }
+      }
+      input::Command::List => {
+        for id in self.sorted_ids() {
+          if let Some(proc) = self.processes.get(&id) {
+            let status = if let Some(pid) = proc.pid() {
+              format!("pid: {}, running", pid)
+            } else {
+              "stopped".to_string()
+            };
+            self.emit_system(proc, &status);
+          }
+        }
+      }
+      input::Command::Help => {}
+    }
+  }
+
   /// Spawn a single process and attach a PTY reader.
   fn start_one(&mut self, id: usize) -> Result<(), String> {
     let reader = {
@@ -220,7 +372,7 @@ impl ProcessManager {
         if let Some(proc) = self.processes.get(&id) {
           self.emit_system(proc, &err);
         } else {
-          eprintln!("Error starting process {}: {}", id, err);
+          self.emit_error(&format!("Error starting process {}: {}", id, err));
         }
 
         self.processes.remove(&id);
@@ -268,6 +420,39 @@ impl ProcessManager {
 
       (exit_success, exit_message)
     };
+
+    // Check removed flag — skip all mode logic
+    if let Some(proc) = self.processes.get(&id)
+      && proc.removed
+    {
+      self.emit_system(proc, "Removed");
+      self.processes.remove(&id);
+      return;
+    }
+
+    // Check pending_restart flag — bypass mode logic, restart immediately
+    let has_pending_restart = self
+      .processes
+      .get_mut(&id)
+      .map(|proc| {
+        if proc.pending_restart {
+          proc.pending_restart = false;
+          true
+        } else {
+          false
+        }
+      })
+      .unwrap_or(false);
+    if has_pending_restart {
+      if let Some(proc) = self.processes.get(&id) {
+        self.emit_system(proc, &exit_message);
+      }
+      if let Err(err) = self.start_one(id) {
+        self.emit_error(&format!("Failed to restart: {}", err));
+        self.processes.remove(&id);
+      }
+      return;
+    }
 
     match self.mode {
       OnExit::Restart => {
@@ -325,6 +510,13 @@ impl ProcessManager {
 
   /// Called when a restart timer fires. Starts the process again (or drops it on failure).
   fn handle_restart(&mut self, id: usize) {
+    if let Some(proc) = self.processes.get(&id)
+      && proc.removed
+    {
+      self.processes.remove(&id);
+      return;
+    }
+
     if self.mode != OnExit::Restart || self.shutting_down {
       self.processes.remove(&id);
       return;
@@ -336,7 +528,7 @@ impl ProcessManager {
       if let Some(proc) = self.processes.get(&id) {
         self.emit_system(proc, &err);
       } else {
-        eprintln!("Error restarting process {}: {}", id, err);
+        self.emit_error(&format!("Error restarting process {}: {}", id, err));
       }
 
       self.processes.remove(&id);
@@ -374,10 +566,10 @@ impl ProcessManager {
   /// First Ctrl+C starts graceful shutdown; second one sends SIGKILL immediately.
   fn handle_ctrlc(&mut self) {
     if !self.shutting_down {
-      eprintln!("\nCtrl+C received, stopping processes...");
+      self.emit_error("Ctrl+C received, stopping processes...");
       self.stop();
     } else {
-      eprintln!("Ctrl+C received again, killing processes...");
+      self.emit_error("Ctrl+C received again, killing processes...");
       self.signal_all(Signal::SIGKILL, "Killing...");
     }
   }
@@ -389,13 +581,34 @@ impl ProcessManager {
 
   /// Main event loop. Spawns all processes, then dispatches events
   /// until every process has exited and been removed from the map.
-  pub async fn start(&mut self) -> u8 {
-    Self::spawn_ctrlc(self.tx.clone());
+  pub async fn start(&mut self, interactive: bool) -> u8 {
+    if !interactive {
+      Self::spawn_ctrlc(self.tx.clone());
+    }
     self.start_all();
 
     while !self.processes.is_empty() {
-      let Some(event) = self.rx.recv().await else {
-        break;
+      let event = if let Some(ref mut input_rx) = self.input_rx {
+        tokio::select! {
+          ev = self.rx.recv() => {
+            match ev {
+              Some(e) => e,
+              None => break,
+            }
+          }
+          ev = input_rx.recv() => {
+            match ev {
+              Some(input::InputEvent::Command(cmd)) => Event::Command(cmd),
+              Some(input::InputEvent::CtrlC) => Event::CtrlC,
+              None => continue,
+            }
+          }
+        }
+      } else {
+        match self.rx.recv().await {
+          Some(e) => e,
+          None => break,
+        }
       };
 
       match event {
@@ -408,6 +621,7 @@ impl ProcessManager {
         Event::Restart(id) => self.handle_restart(id),
         Event::CtrlC => self.handle_ctrlc(),
         Event::ForceKill => self.signal_all(Signal::SIGKILL, "Killing..."),
+        Event::Command(cmd) => self.handle_command(cmd),
       }
     }
 
