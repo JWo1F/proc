@@ -243,7 +243,9 @@ impl ProcessManager {
         };
         if let Some(proc) = self.processes.get(&id) {
           if proc.is_running() {
-            proc.signal(Signal::SIGINT);
+            if let Err(err) = proc.signal(Signal::SIGINT) {
+              self.emit_error(&err);
+            }
             self.emit_system(proc, "Killing...");
           } else {
             self.emit_system(proc, "Not running");
@@ -260,7 +262,9 @@ impl ProcessManager {
           proc.reset_restart_counter();
           let running = proc.is_running();
           if running {
-            proc.signal(Signal::SIGINT);
+            if let Err(err) = proc.signal(Signal::SIGINT) {
+              self.emit_error(&err);
+            }
           } else {
             proc.pending_restart = false;
           }
@@ -309,7 +313,9 @@ impl ProcessManager {
           proc.removed = true;
           let running = proc.is_running();
           if running {
-            proc.signal(Signal::SIGINT);
+            if let Err(err) = proc.signal(Signal::SIGINT) {
+              self.emit_error(&err);
+            }
           }
           running
         } else {
@@ -543,7 +549,9 @@ impl ProcessManager {
       };
 
       if process.is_running() {
-        process.signal(signal);
+        if let Err(err) = process.signal(signal) {
+          self.emit_error(&err);
+        }
         self.emit_system(process, message);
       }
     }

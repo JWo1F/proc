@@ -86,35 +86,24 @@ impl Process {
 
   /// Send a Unix signal to the process group (negative PID) so that the child
   /// and all its descendants receive it. No-op if the process is not running.
-  pub fn signal(&self, signal: Signal) {
+  pub fn signal(&self, signal: Signal) -> Result<(), String> {
     if let Some(child) = &self.child
       && let Some(pid) = child.id()
     {
       let gid = -(pid as i32);
-
-      if let Err(err) = nix::sys::signal::kill(nix::unistd::Pid::from_raw(gid), signal) {
-        eprintln!("Error sending signal to process {}: {}", pid, err);
-      }
+      nix::sys::signal::kill(nix::unistd::Pid::from_raw(gid), signal)
+        .map_err(|err| format!("Error sending signal to process {}: {}", pid, err))?;
     }
+    Ok(())
   }
 
   /// Take the child handle and collect its exit status.
   pub async fn take_exit_status(&mut self) -> Option<ExitStatus> {
     let mut child = self.child.take()?;
-
     match child.try_wait() {
       Ok(Some(status)) => Some(status),
-      Ok(None) => match child.wait().await {
-        Ok(status) => Some(status),
-        Err(err) => {
-          eprintln!("Error waiting process [{}]: {}", self.name, err);
-          None
-        }
-      },
-      Err(err) => {
-        eprintln!("Error checking process [{}] status: {}", self.name, err);
-        None
-      }
+      Ok(None) => child.wait().await.ok(),
+      Err(_) => None,
     }
   }
 }
