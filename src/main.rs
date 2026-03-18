@@ -185,6 +185,8 @@ fn spawn_stdout(
       compact: opts.compact,
       no_system: opts.no_system,
       name_width,
+      interactive: None,
+      name_width_rx: None,
     },
   )))
 }

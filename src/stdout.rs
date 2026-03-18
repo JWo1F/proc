@@ -1,31 +1,77 @@
 use crate::core::LogEvent;
 use colored::Colorize;
-use tokio::sync::broadcast;
+use crossterm::{cursor, execute, terminal};
+use std::io::{Write, stdout};
+use tokio::sync::{broadcast, watch};
 
 const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
 const COMPACT_INDICATOR: &str = "▌";
+const PROMPT: &str = "> ";
 
 pub struct StdoutConfig {
   pub timestamps: bool,
   pub compact: bool,
   pub no_system: bool,
   pub name_width: usize,
+  /// When Some, interactive mode is active — read buffer from the watch channel.
+  pub interactive: Option<watch::Receiver<String>>,
+  /// When Some, name_width updates dynamically (for `add` command).
+  pub name_width_rx: Option<watch::Receiver<usize>>,
 }
 
-/// Run the stdout log consumer. Reads log events from the broadcast channel
-/// and prints them to stdout with colored prefixes.
-pub async fn run(mut rx: broadcast::Receiver<LogEvent>, config: StdoutConfig) {
+pub async fn run(mut rx: broadcast::Receiver<LogEvent>, mut config: StdoutConfig) {
   loop {
     match rx.recv().await {
       Ok(event) => {
         if config.no_system && event.system {
           continue;
         }
-        println!("{}", format_line(&event, &config));
+
+        // Update name_width if it changed
+        if let Some(ref mut nw_rx) = config.name_width_rx {
+          if nw_rx.has_changed().unwrap_or(false) {
+            config.name_width = *nw_rx.borrow_and_update();
+          }
+        }
+
+        let line = format_line(&event, &config);
+
+        if let Some(ref buffer_rx) = config.interactive {
+          // Interactive mode: print above prompt, then redraw prompt
+          let buffer = buffer_rx.borrow().clone();
+          let mut out = stdout();
+          let _ = execute!(
+            out,
+            cursor::MoveToColumn(0),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+          );
+          let _ = writeln!(out, "{}", line);
+          let _ = write!(out, "{}{}", PROMPT, buffer);
+          let _ = out.flush();
+        } else {
+          println!("{}", line);
+        }
       }
       Err(broadcast::error::RecvError::Closed) => break,
       Err(broadcast::error::RecvError::Lagged(n)) => {
-        eprintln!("Warning: stdout dropped {} log events", n);
+        if config.interactive.is_some() {
+          let buffer = config
+            .interactive
+            .as_ref()
+            .map(|rx| rx.borrow().clone())
+            .unwrap_or_default();
+          let mut out = stdout();
+          let _ = execute!(
+            out,
+            cursor::MoveToColumn(0),
+            terminal::Clear(terminal::ClearType::CurrentLine),
+          );
+          let _ = writeln!(out, "Warning: stdout dropped {} log events", n);
+          let _ = write!(out, "{}{}", PROMPT, buffer);
+          let _ = out.flush();
+        } else {
+          eprintln!("Warning: stdout dropped {} log events", n);
+        }
       }
     }
   }
