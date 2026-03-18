@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::io::IsTerminal;
 use std::process::ExitCode;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc, watch};
 
 mod core;
 mod pipe;
@@ -54,6 +54,10 @@ struct RunOptions {
   /// Hide system messages (Spawned, Stopped, etc.)
   #[arg(long)]
   no_system: bool,
+
+  /// Enable interactive command prompt
+  #[arg(short = 'i', long)]
+  interactive: bool,
 
   /// Start SSE server (optional port, default: derived from folder name)
   #[cfg(feature = "web")]
@@ -191,6 +195,30 @@ fn spawn_stdout(
   )))
 }
 
+fn spawn_stdout_interactive(
+  opts: &RunOptions,
+  name_width: usize,
+  log_tx: &broadcast::Sender<crate::core::LogEvent>,
+  buffer_rx: Option<watch::Receiver<String>>,
+  name_width_rx: Option<watch::Receiver<usize>>,
+) -> Option<tokio::task::JoinHandle<()>> {
+  if opts.silent {
+    return None;
+  }
+  let rx = log_tx.subscribe();
+  Some(tokio::spawn(stdout::run(
+    rx,
+    stdout::StdoutConfig {
+      timestamps: opts.timestamps,
+      compact: opts.compact,
+      no_system: opts.no_system,
+      name_width,
+      interactive: buffer_rx,
+      name_width_rx,
+    },
+  )))
+}
+
 #[tokio::main(flavor = "current_thread")]
 pub async fn main() -> ExitCode {
   let args = Args::parse();
@@ -295,13 +323,38 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     }
   };
 
-  let stdout_handle = spawn_stdout(&start, manager.name_width(), &log_tx);
+  let interactive = start.interactive;
+
+  // Set up interactive mode channels
+  let (buffer_rx, name_width_rx, raw_guard) = if interactive {
+    let (itx, irx) = mpsc::unbounded_channel();
+    let (btx, brx) = watch::channel(String::new());
+    let nw_rx = manager.name_width_watch();
+    manager.set_input_rx(irx);
+
+    // Install panic hook and enable raw mode
+    input::install_panic_hook();
+    let guard = input::RawModeGuard::new().expect("Failed to enable raw terminal mode");
+
+    // Spawn the input reading task
+    let log_tx_clone = log_tx.clone();
+    tokio::spawn(input::run(itx, btx, log_tx_clone));
+
+    (Some(brx), Some(nw_rx), Some(guard))
+  } else {
+    (None, None, None)
+  };
+
+  let stdout_handle = spawn_stdout_interactive(&start, manager.name_width(), &log_tx, buffer_rx, name_width_rx);
 
   #[cfg(feature = "web")]
   maybe_spawn_web(&start, &log_tx);
 
-  let code = manager.start(false).await;
+  let code = manager.start(interactive).await;
   drop(manager);
+
+  // Drop raw mode guard explicitly (restores terminal)
+  drop(raw_guard);
 
   #[cfg(feature = "web")]
   if start.web.is_some() {
