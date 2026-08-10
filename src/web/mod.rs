@@ -2,10 +2,10 @@ mod sse;
 mod store;
 
 use crate::core::LogEvent;
-use axum::routing::get;
 use axum::Router;
-use colored::Color;
 use axum::http::{HeaderName, HeaderValue};
+use axum::routing::get;
+use colored::Color;
 use std::sync::Arc;
 use store::LogStore;
 use tokio::sync::broadcast;

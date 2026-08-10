@@ -18,4 +18,8 @@ pub struct LogEvent {
   pub line: String,
   /// Whether this is a system message (spawn, exit, etc).
   pub system: bool,
+  /// Whether this is a direct reply to an interactive command (`ps`, `help`,
+  /// `info`). Replies are system messages that `--no-system` must not hide —
+  /// suppressing output the user explicitly asked for reads as a broken prompt.
+  pub reply: bool,
 }

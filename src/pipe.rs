@@ -18,6 +18,7 @@ fn stdin_event(line: String, system: bool) -> LogEvent {
     color: STDIN_COLOR,
     line,
     system,
+    reply: false,
   }
 }
 
@@ -51,10 +52,7 @@ pub async fn run(log_tx: broadcast::Sender<LogEvent>) -> u8 {
     }
   }
 
-  let _ = log_tx.send(stdin_event(
-    format!("[{}] End of input", STDIN_NAME),
-    true,
-  ));
+  let _ = log_tx.send(stdin_event(format!("[{}] End of input", STDIN_NAME), true));
 
   if failed { 1 } else { 0 }
 }

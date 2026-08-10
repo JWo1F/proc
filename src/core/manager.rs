@@ -1,7 +1,7 @@
+use super::LogEvent;
 use super::ansi;
 use super::color::color_for_index;
 use super::process::Process;
-use super::LogEvent;
 use crate::input;
 use clap::ValueEnum;
 use nix::sys::signal::Signal;
@@ -81,6 +81,20 @@ pub struct ProcessManager {
   input_rx: Option<mpsc::UnboundedReceiver<input::InputEvent>>,
   /// Optional watch sender for name_width updates.
   name_width_tx: Option<tokio::sync::watch::Sender<usize>>,
+  /// Optional watch sender publishing live process names for tab completion.
+  names_tx: Option<tokio::sync::watch::Sender<Vec<String>>>,
+}
+
+/// Render a duration as a compact, fixed-shape uptime string.
+fn format_uptime(duration: Duration) -> String {
+  let seconds = duration.as_secs();
+  if seconds < 60 {
+    format!("{}s", seconds)
+  } else if seconds < 3600 {
+    format!("{}m{:02}s", seconds / 60, seconds % 60)
+  } else {
+    format!("{}h{:02}m", seconds / 3600, (seconds % 3600) / 60)
+  }
 }
 
 impl ProcessManager {
@@ -94,7 +108,11 @@ impl ProcessManager {
       return Err("No processes to run".to_string());
     }
 
-    let name_width = entries.iter().map(|(name, _)| name.len()).max().unwrap_or(0);
+    let name_width = entries
+      .iter()
+      .map(|(name, _)| name.len())
+      .max()
+      .unwrap_or(0);
     let (tx, rx) = mpsc::unbounded_channel();
 
     let processes: HashMap<usize, Process> = entries
@@ -115,6 +133,7 @@ impl ProcessManager {
       next_id: entries.len(),
       input_rx: None,
       name_width_tx: None,
+      names_tx: None,
     })
   }
 
@@ -135,24 +154,70 @@ impl ProcessManager {
     rx
   }
 
+  /// Create a watch channel publishing process names, for tab completion.
+  pub fn names_watch(&mut self) -> tokio::sync::watch::Receiver<Vec<String>> {
+    let (tx, rx) = tokio::sync::watch::channel(self.process_names());
+    self.names_tx = Some(tx);
+    rx
+  }
+
+  /// Current process names in display order.
+  fn process_names(&self) -> Vec<String> {
+    self
+      .sorted_ids()
+      .iter()
+      .filter_map(|id| self.processes.get(id))
+      .map(|proc| proc.name.clone())
+      .collect()
+  }
+
+  /// Republish the name list after the process set changes.
+  fn publish_names(&self) {
+    if let Some(ref tx) = self.names_tx {
+      let _ = tx.send(self.process_names());
+    }
+  }
+
   /// Find a process ID by name.
   fn find_by_name(&self, name: &str) -> Option<usize> {
-    self.processes.iter().find(|(_, p)| p.name == name).map(|(id, _)| *id)
+    self
+      .processes
+      .iter()
+      .find(|(_, p)| p.name == name)
+      .map(|(id, _)| *id)
+  }
+
+  /// Whether an interactive prompt is attached.
+  fn is_interactive(&self) -> bool {
+    self.input_rx.is_some()
   }
 
   /// Emit an error message through the broadcast channel (for interactive mode)
   /// or to stderr (for non-interactive mode).
   fn emit_error(&self, message: &str) {
-    if self.name_width_tx.is_some() {
+    if self.is_interactive() {
       let _ = self.log_tx.send(LogEvent {
         process: "system".to_string(),
         color: colored::Color::Red,
         line: message.to_string(),
         system: true,
+        reply: true,
       });
     } else {
       eprintln!("{}", message);
     }
+  }
+
+  /// Emit a direct answer to an interactive command. Carries the process's own
+  /// name and color so the log gutter keeps identifying who a line is about.
+  fn emit_reply(&self, process: &str, color: colored::Color, line: String) {
+    let _ = self.log_tx.send(LogEvent {
+      process: process.to_string(),
+      color,
+      line,
+      system: true,
+      reply: true,
+    });
   }
 
   /// Read lines from a PTY and forward them as `Event::Line` / `Event::ProcessEnded`.
@@ -226,6 +291,7 @@ impl ProcessManager {
       color: proc.color,
       line: line.to_string(),
       system,
+      reply: false,
     });
   }
 
@@ -234,129 +300,313 @@ impl ProcessManager {
     self.emit(proc, &format!("[{}] {}", proc.name, message), true);
   }
 
+  /// Resolve a target list to process IDs, reporting every unknown name at once
+  /// rather than failing on the first one.
+  fn resolve(&self, target: &input::Target) -> Option<Vec<usize>> {
+    let names = match target {
+      input::Target::All => return Some(self.sorted_ids()),
+      input::Target::Names(names) => names,
+    };
+
+    let mut ids = Vec::new();
+    let mut unknown = Vec::new();
+    for name in names {
+      match self.find_by_name(name) {
+        Some(id) => ids.push(id),
+        None => unknown.push(name.clone()),
+      }
+    }
+
+    if !unknown.is_empty() {
+      self.emit_error(&format!("Unknown process: {}", unknown.join(", ")));
+      return None;
+    }
+
+    ids.sort_unstable();
+    ids.dedup();
+    Some(ids)
+  }
+
   fn handle_command(&mut self, cmd: input::Command) {
     match cmd {
-      input::Command::Kill(name) => {
-        let Some(id) = self.find_by_name(&name) else {
-          self.emit_error(&format!("Unknown process: {}", name));
+      input::Command::Start(target) => {
+        let Some(ids) = self.resolve(&target) else {
           return;
         };
-        if let Some(proc) = self.processes.get(&id) {
-          if proc.is_running() {
-            if let Err(err) = proc.signal(Signal::SIGINT) {
-              self.emit_error(&err);
-            }
-            self.emit_system(proc, "Killing...");
-          } else {
-            self.emit_system(proc, "Not running");
-          }
+        for id in ids {
+          self.start_target(id);
         }
       }
-      input::Command::Restart(name) => {
-        let Some(id) = self.find_by_name(&name) else {
-          self.emit_error(&format!("Unknown process: {}", name));
+      input::Command::Stop(target) => {
+        let Some(ids) = self.resolve(&target) else {
           return;
         };
-        let running = if let Some(proc) = self.processes.get_mut(&id) {
-          proc.pending_restart = true;
-          proc.reset_restart_counter();
-          let running = proc.is_running();
-          if running {
-            if let Err(err) = proc.signal(Signal::SIGINT) {
-              self.emit_error(&err);
-            }
-          } else {
-            proc.pending_restart = false;
-          }
-          running
-        } else {
-          return;
-        };
-        if running {
-          if let Some(proc) = self.processes.get(&id) {
-            self.emit_system(proc, "Restarting...");
-          }
-        } else {
-          if let Err(err) = self.start_one(id) {
-            self.emit_error(&format!("Failed to restart {}: {}", name, err));
-          }
+        for id in ids {
+          self.signal_target(id, Signal::SIGINT, "Stopping...");
         }
       }
-      input::Command::Run(name, cmd) => {
-        if self.find_by_name(&name).is_some() {
-          self.emit_error(&format!("Process already exists: {}", name));
+      input::Command::Kill(target) => {
+        let Some(ids) = self.resolve(&target) else {
+          return;
+        };
+        for id in ids {
+          self.signal_target(id, Signal::SIGKILL, "Killing...");
+        }
+      }
+      input::Command::Restart(target) => {
+        let Some(ids) = self.resolve(&target) else {
+          return;
+        };
+        for id in ids {
+          self.restart_target(id);
+        }
+      }
+      input::Command::Remove(target) => {
+        let Some(ids) = self.resolve(&target) else {
+          return;
+        };
+        for id in ids {
+          self.remove_target(id);
+        }
+      }
+      input::Command::Add(name, cmd) => self.add_process(&name, &cmd),
+      input::Command::Ps => self.emit_ps(),
+      input::Command::Info(name) => self.emit_info(&name),
+      input::Command::Mode(None) => self.emit_reply(
+        "system",
+        colored::Color::White,
+        format!("On-exit mode: {}", self.mode),
+      ),
+      input::Command::Mode(Some(mode)) => {
+        if self.shutting_down {
+          self.emit_error("Shutting down — the on-exit mode can no longer change");
           return;
         }
-        let id = self.next_id;
-        self.next_id += 1;
-        let process = Process::new(&name, &cmd, color_for_index(id));
-        self.processes.insert(id, process);
+        self.mode = mode;
+        self.emit_reply(
+          "system",
+          colored::Color::White,
+          format!("On-exit mode: {}", mode),
+        );
+      }
+      input::Command::Quit => {
+        self.emit_reply(
+          "system",
+          colored::Color::White,
+          "Stopping all processes...".to_string(),
+        );
+        self.stop();
+      }
+    }
+  }
 
-        if name.len() > self.name_width {
-          self.name_width = name.len();
-          if let Some(ref tx) = self.name_width_tx {
-            let _ = tx.send(self.name_width);
-          }
-        }
+  /// Start a stopped process, clearing any explicit stop that was holding it down.
+  fn start_target(&mut self, id: usize) {
+    if self.processes.get(&id).is_some_and(|p| p.is_running()) {
+      if let Some(proc) = self.processes.get(&id) {
+        self.emit_system(proc, "Already running");
+      }
+      return;
+    }
 
-        if let Err(err) = self.start_one(id) {
-          self.emit_error(&format!("Failed to start {}: {}", name, err));
-          self.processes.remove(&id);
-        }
+    if let Some(proc) = self.processes.get_mut(&id) {
+      proc.stopped = false;
+      proc.reset_restart_counter();
+    }
+
+    if let Err(err) = self.start_one(id) {
+      self.emit_error(&format!("Failed to start: {}", err));
+    }
+  }
+
+  /// Signal a process and mark it explicitly stopped, so the `--on-exit`
+  /// policy does not immediately undo what the user just asked for.
+  fn signal_target(&mut self, id: usize, signal: Signal, message: &str) {
+    let running = self.processes.get(&id).is_some_and(|p| p.is_running());
+
+    if let Some(proc) = self.processes.get_mut(&id) {
+      proc.stopped = true;
+    }
+
+    let Some(proc) = self.processes.get(&id) else {
+      return;
+    };
+
+    if !running {
+      self.emit_system(proc, "Already stopped");
+      return;
+    }
+
+    if let Err(err) = proc.signal(signal) {
+      self.emit_error(&err);
+      return;
+    }
+    self.emit_system(proc, message);
+  }
+
+  fn restart_target(&mut self, id: usize) {
+    let Some(proc) = self.processes.get_mut(&id) else {
+      return;
+    };
+
+    proc.stopped = false;
+    proc.reset_restart_counter();
+    let running = proc.is_running();
+    proc.pending_restart = running;
+
+    if !running {
+      if let Err(err) = self.start_one(id) {
+        self.emit_error(&format!("Failed to restart: {}", err));
       }
-      input::Command::Up(name) => {
-        let Some(id) = self.find_by_name(&name) else {
-          self.emit_error(&format!("Unknown process: {}", name));
-          return;
-        };
-        if self.processes.get(&id).is_some_and(|p| p.is_running()) {
-          if let Some(proc) = self.processes.get(&id) {
-            self.emit_system(proc, "Already running");
-          }
-          return;
+      return;
+    }
+
+    let Some(proc) = self.processes.get(&id) else {
+      return;
+    };
+    if let Err(err) = proc.signal(Signal::SIGINT) {
+      self.emit_error(&err);
+      return;
+    }
+    self.emit_system(proc, "Restarting...");
+  }
+
+  /// Drop a process from the table. A running child is stopped gracefully first
+  /// and the entry disappears once it actually exits.
+  fn remove_target(&mut self, id: usize) {
+    let running = self.processes.get(&id).is_some_and(|p| p.is_running());
+
+    if let Some(proc) = self.processes.get_mut(&id) {
+      proc.stopped = true;
+      proc.pending_remove = true;
+    }
+
+    if running {
+      if let Some(proc) = self.processes.get(&id) {
+        if let Err(err) = proc.signal(Signal::SIGINT) {
+          self.emit_error(&err);
         }
-        if let Some(proc) = self.processes.get_mut(&id) {
-          proc.removed = false;
-        }
-        if let Err(err) = self.start_one(id) {
-          self.emit_error(&format!("Failed to start {}: {}", name, err));
-        }
+        self.emit_system(proc, "Removing...");
       }
-      input::Command::Down(name) => {
-        let Some(id) = self.find_by_name(&name) else {
-          self.emit_error(&format!("Unknown process: {}", name));
-          return;
-        };
-        let running = self.processes.get(&id).is_some_and(|p| p.is_running());
-        if let Some(proc) = self.processes.get_mut(&id) {
-          proc.removed = true;
-        }
-        if running {
-          if let Some(proc) = self.processes.get(&id) {
-            if let Err(err) = proc.signal(Signal::SIGINT) {
-              self.emit_error(&err);
-            }
-            self.emit_system(proc, "Stopping...");
-          }
-        } else {
-          if let Some(proc) = self.processes.get(&id) {
-            self.emit_system(proc, "Already stopped");
-          }
-        }
+      return;
+    }
+
+    if let Some(proc) = self.processes.get(&id) {
+      self.emit_system(proc, "Removed");
+    }
+    self.processes.remove(&id);
+    self.publish_names();
+  }
+
+  fn add_process(&mut self, name: &str, cmd: &str) {
+    if self.find_by_name(name).is_some() {
+      self.emit_error(&format!("Process already exists: {}", name));
+      return;
+    }
+
+    let id = self.next_id;
+    self.next_id += 1;
+    self
+      .processes
+      .insert(id, Process::new(name, cmd, color_for_index(id)));
+
+    if name.len() > self.name_width {
+      self.name_width = name.len();
+      if let Some(ref tx) = self.name_width_tx {
+        let _ = tx.send(self.name_width);
       }
-      input::Command::List => {
-        for id in self.sorted_ids() {
-          if let Some(proc) = self.processes.get(&id) {
-            let status = if let Some(pid) = proc.pid() {
-              format!("pid: {}, running", pid)
-            } else {
-              "stopped".to_string()
-            };
-            self.emit_system(proc, &status);
-          }
-        }
-      }
-      input::Command::Help => {}
+    }
+
+    if let Err(err) = self.start_one(id) {
+      self.emit_error(&format!("Failed to start {}: {}", name, err));
+      self.processes.remove(&id);
+    }
+
+    self.publish_names();
+  }
+
+  /// One-word status for the process table.
+  fn status_of(proc: &Process) -> &'static str {
+    if proc.is_running() {
+      "running"
+    } else if proc.stopped {
+      "stopped"
+    } else {
+      "restarting"
+    }
+  }
+
+  fn emit_ps(&self) {
+    let ids = self.sorted_ids();
+    if ids.is_empty() {
+      self.emit_reply(
+        "system",
+        colored::Color::White,
+        "No processes — use `add <name>: <command>`".to_string(),
+      );
+      return;
+    }
+
+    self.emit_reply(
+      "system",
+      colored::Color::White,
+      format!(
+        "{:<11}{:>7}{:>9}{:>10}",
+        "STATUS", "PID", "UPTIME", "RESTARTS"
+      ),
+    );
+
+    for id in ids {
+      let Some(proc) = self.processes.get(&id) else {
+        continue;
+      };
+      let pid = proc
+        .pid()
+        .map_or_else(|| "—".to_string(), |p| p.to_string());
+      let uptime = proc.uptime().map_or_else(|| "—".to_string(), format_uptime);
+
+      self.emit_reply(
+        &proc.name,
+        proc.color,
+        format!(
+          "{:<11}{:>7}{:>9}{:>10}",
+          Self::status_of(proc),
+          pid,
+          uptime,
+          proc.restarts()
+        ),
+      );
+    }
+  }
+
+  fn emit_info(&self, name: &str) {
+    let Some(id) = self.find_by_name(name) else {
+      self.emit_error(&format!("Unknown process: {}", name));
+      return;
+    };
+    let Some(proc) = self.processes.get(&id) else {
+      return;
+    };
+
+    let status = match proc.pid() {
+      Some(pid) => format!("{} (pid {})", Self::status_of(proc), pid),
+      None => Self::status_of(proc).to_string(),
+    };
+
+    let mut fields = vec![
+      format!("command:   {}", proc.cmd),
+      format!("status:    {}", status),
+    ];
+    if let Some(uptime) = proc.uptime() {
+      fields.push(format!("uptime:    {}", format_uptime(uptime)));
+    }
+    fields.push(format!("restarts:  {}", proc.restarts()));
+    if let Some(ref last_exit) = proc.last_exit {
+      fields.push(format!("last exit: {}", last_exit));
+    }
+
+    for field in fields {
+      self.emit_reply(&proc.name, proc.color, field);
     }
   }
 
@@ -439,11 +689,25 @@ impl ProcessManager {
       (exit_success, exit_message)
     };
 
-    // Check removed flag — skip all mode logic, keep process in map for `up`
-    if let Some(proc) = self.processes.get(&id)
-      && proc.removed
-    {
-      self.emit_system(proc, "Stopped");
+    if let Some(proc) = self.processes.get_mut(&id) {
+      proc.last_exit = Some(exit_message.clone());
+    }
+
+    // An explicit `stop`/`kill`/`remove` outranks the on-exit policy: skip all
+    // mode logic so the process stays down until the user says otherwise.
+    let (stopped, pending_remove) = self
+      .processes
+      .get(&id)
+      .map_or((false, false), |proc| (proc.stopped, proc.pending_remove));
+
+    if stopped {
+      if let Some(proc) = self.processes.get(&id) {
+        self.emit_system(proc, if pending_remove { "Removed" } else { "Stopped" });
+      }
+      if pending_remove {
+        self.processes.remove(&id);
+        self.publish_names();
+      }
       return;
     }
 
@@ -520,7 +784,17 @@ impl ProcessManager {
           self.emit_system(proc, message);
         }
 
-        self.processes.remove(&id);
+        // Interactively the table is the interface, so keep the row: `ps` still
+        // lists the process and `start` can bring it back. Headless there is no
+        // one to revive it, and the run only ends once the table empties.
+        if self.is_interactive() && !self.shutting_down {
+          if let Some(proc) = self.processes.get_mut(&id) {
+            proc.stopped = true;
+          }
+        } else {
+          self.processes.remove(&id);
+          self.publish_names();
+        }
       }
     }
   }
@@ -528,9 +802,10 @@ impl ProcessManager {
   /// Called when a restart timer fires. Starts the process again (or drops it on failure).
   fn handle_restart(&mut self, id: usize) {
     if let Some(proc) = self.processes.get(&id)
-      && proc.removed
+      && proc.stopped
     {
       self.processes.remove(&id);
+      self.publish_names();
       return;
     }
 
@@ -606,7 +881,9 @@ impl ProcessManager {
     }
     self.start_all();
 
-    while !self.processes.is_empty() {
+    // In interactive mode the session outlives the process set: an empty table
+    // is a prompt you can still `add` to, not a reason to exit.
+    while !self.processes.is_empty() || (interactive && !self.shutting_down) {
       let event = if let Some(ref mut input_rx) = self.input_rx {
         tokio::select! {
           ev = self.rx.recv() => {

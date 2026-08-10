@@ -2,7 +2,7 @@ use colored::Color;
 use nix::sys::signal::Signal;
 use pty_process::{Command, Pty};
 use std::process::ExitStatus;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader, Lines};
 use tokio::process::Child;
 
@@ -16,7 +16,7 @@ pub struct Process {
   /// Display name from the Procfile (used in log prefixes).
   pub(crate) name: String,
   /// Shell command to execute.
-  cmd: String,
+  pub(crate) cmd: String,
   /// Handle to the running child, `None` before start or between restarts.
   child: Option<Child>,
   /// Color assigned for this process's log output.
@@ -25,8 +25,18 @@ pub struct Process {
   restart_attempts: u32,
   /// Set by the `restart` command — bypasses backoff on next exit.
   pub(crate) pending_restart: bool,
-  /// Set by the `remove` command — skips all mode logic on exit.
-  pub(crate) removed: bool,
+  /// Set by the `stop` command. An explicit stop outranks the `--on-exit`
+  /// policy: the process stays in the table but is never auto-restarted.
+  pub(crate) stopped: bool,
+  /// Set by the `remove` command. The entry is dropped once the child exits,
+  /// so removal is still graceful rather than an immediate kill.
+  pub(crate) pending_remove: bool,
+  /// When the current child was spawned, for uptime display.
+  started_at: Option<Instant>,
+  /// Total spawns over the session; restart count is this minus the first start.
+  spawns: u32,
+  /// How the previous run ended, for `info`.
+  pub(crate) last_exit: Option<String>,
 }
 
 impl Process {
@@ -38,7 +48,11 @@ impl Process {
       color,
       restart_attempts: 0,
       pending_restart: false,
-      removed: false,
+      stopped: false,
+      pending_remove: false,
+      started_at: None,
+      spawns: 0,
+      last_exit: None,
     }
   }
 
@@ -53,6 +67,8 @@ impl Process {
       .map_err(|e| format!("Failed to spawn process: {}", e))?;
 
     self.child = Some(child);
+    self.started_at = Some(Instant::now());
+    self.spawns = self.spawns.saturating_add(1);
 
     Ok(BufReader::new(pty).lines())
   }
@@ -60,6 +76,16 @@ impl Process {
   /// PID of the running child, or `None` if not currently running.
   pub fn pid(&self) -> Option<u32> {
     self.child.as_ref().and_then(|c| c.id())
+  }
+
+  /// How long the current child has been running, or `None` if stopped.
+  pub fn uptime(&self) -> Option<Duration> {
+    self.started_at.map(|start| start.elapsed())
+  }
+
+  /// Times this process has been re-spawned after its initial start.
+  pub fn restarts(&self) -> u32 {
+    self.spawns.saturating_sub(1)
   }
 
   /// Compute the next restart delay using linear backoff:
@@ -100,6 +126,7 @@ impl Process {
   /// Take the child handle and collect its exit status.
   pub async fn take_exit_status(&mut self) -> Option<ExitStatus> {
     let mut child = self.child.take()?;
+    self.started_at = None;
     match child.try_wait() {
       Ok(Some(status)) => Some(status),
       Ok(None) => child.wait().await.ok(),

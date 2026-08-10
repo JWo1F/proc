@@ -3,8 +3,8 @@ use axum::extract::State;
 use axum::response::sse::{Event, Sse};
 use std::convert::Infallible;
 use std::sync::Arc;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 
 const SSE_RETRY_MS: u64 = 2000;
 

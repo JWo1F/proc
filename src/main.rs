@@ -14,8 +14,8 @@ use std::process::ExitCode;
 use tokio::sync::{broadcast, mpsc, watch};
 
 mod core;
-mod pipe;
 mod input;
+mod pipe;
 mod stdout;
 #[cfg(feature = "web")]
 mod web;
@@ -35,9 +35,9 @@ struct RunOptions {
   #[arg(short = 'r', long = "run")]
   run: Vec<String>,
 
-  /// Behavior when a process exits
-  #[arg(value_enum, long, default_value_t = OnExit::Stop)]
-  on_exit: OnExit,
+  /// Behavior when a process exits [default: stop; ignore with -i]
+  #[arg(value_enum, long)]
+  on_exit: Option<OnExit>,
 
   /// Prefix each line with a timestamp
   #[arg(short = 'T', long)]
@@ -63,6 +63,22 @@ struct RunOptions {
   #[cfg(feature = "web")]
   #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "0")]
   web: Option<u16>,
+}
+
+impl RunOptions {
+  /// Resolve the on-exit policy, which defaults differently by mode.
+  ///
+  /// Headless, `Stop` is right: one process dying usually invalidates the whole
+  /// run. Interactively the session outlives any individual process — the
+  /// prompt is still there to inspect what happened and start it again — so a
+  /// process ending on its own must not tear the session down.
+  fn effective_on_exit(&self) -> OnExit {
+    self.on_exit.unwrap_or(if self.interactive {
+      OnExit::Ignore
+    } else {
+      OnExit::Stop
+    })
+  }
 }
 
 #[derive(Parser, Debug)]
@@ -160,11 +176,7 @@ fn read_and_parse(config_path: &str) -> Result<Vec<(String, String)>, ExitCode> 
 fn maybe_spawn_web(opts: &RunOptions, log_tx: &broadcast::Sender<crate::core::LogEvent>) {
   if let Some(port) = opts.web {
     let rx = log_tx.subscribe();
-    let resolved_port = if port == 0 {
-      web::port_for_cwd()
-    } else {
-      port
-    };
+    let resolved_port = if port == 0 { web::port_for_cwd() } else { port };
     let no_system = opts.no_system;
     tokio::spawn(async move {
       web::start(rx, resolved_port, no_system).await;
@@ -191,6 +203,7 @@ fn spawn_stdout(
       name_width,
       interactive: None,
       name_width_rx: None,
+      display_rx: None,
     },
   )))
 }
@@ -199,8 +212,9 @@ fn spawn_stdout_interactive(
   opts: &RunOptions,
   name_width: usize,
   log_tx: &broadcast::Sender<crate::core::LogEvent>,
-  buffer_rx: Option<watch::Receiver<String>>,
+  prompt_rx: Option<watch::Receiver<input::PromptState>>,
   name_width_rx: Option<watch::Receiver<usize>>,
+  display_rx: Option<mpsc::UnboundedReceiver<input::DisplayCommand>>,
 ) -> Option<tokio::task::JoinHandle<()>> {
   if opts.silent {
     return None;
@@ -213,8 +227,9 @@ fn spawn_stdout_interactive(
       compact: opts.compact,
       no_system: opts.no_system,
       name_width,
-      interactive: buffer_rx,
+      interactive: prompt_rx,
       name_width_rx,
+      display_rx,
     },
   )))
 }
@@ -315,37 +330,57 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
 
   let (log_tx, _) = broadcast::channel(16384);
 
-  let mut manager = match ProcessManager::new(&process_refs, start.on_exit, log_tx.clone()) {
-    Ok(m) => m,
-    Err(err) => {
-      eprintln!("{}", err);
-      return 2.into();
-    }
-  };
+  let mut manager =
+    match ProcessManager::new(&process_refs, start.effective_on_exit(), log_tx.clone()) {
+      Ok(m) => m,
+      Err(err) => {
+        eprintln!("{}", err);
+        return 2.into();
+      }
+    };
 
   let interactive = start.interactive;
 
   // Set up interactive mode channels
-  let (buffer_rx, name_width_rx, raw_guard) = if interactive {
-    let (itx, irx) = mpsc::unbounded_channel();
-    let (btx, brx) = watch::channel(String::new());
-    let nw_rx = manager.name_width_watch();
-    manager.set_input_rx(irx);
+  let (prompt_rx, name_width_rx, display_rx, raw_guard) = if interactive {
+    let (input_tx, input_rx) = mpsc::unbounded_channel();
+    let (display_tx, display_rx) = mpsc::unbounded_channel();
+    let (prompt_tx, prompt_rx) = watch::channel(input::PromptState::default());
+    let name_width_rx = manager.name_width_watch();
+    let names_rx = manager.names_watch();
+    manager.set_input_rx(input_rx);
 
     // Install panic hook and enable raw mode
     input::install_panic_hook();
     let guard = input::RawModeGuard::new().expect("Failed to enable raw terminal mode");
 
     // Spawn the input reading task
-    let log_tx_clone = log_tx.clone();
-    tokio::spawn(input::run(itx, btx, log_tx_clone));
+    tokio::spawn(input::run(
+      input_tx,
+      display_tx,
+      prompt_tx,
+      names_rx,
+      log_tx.clone(),
+    ));
 
-    (Some(brx), Some(nw_rx), Some(guard))
+    (
+      Some(prompt_rx),
+      Some(name_width_rx),
+      Some(display_rx),
+      Some(guard),
+    )
   } else {
-    (None, None, None)
+    (None, None, None, None)
   };
 
-  let stdout_handle = spawn_stdout_interactive(&start, manager.name_width(), &log_tx, buffer_rx, name_width_rx);
+  let stdout_handle = spawn_stdout_interactive(
+    &start,
+    manager.name_width(),
+    &log_tx,
+    prompt_rx,
+    name_width_rx,
+    display_rx,
+  );
 
   #[cfg(feature = "web")]
   maybe_spawn_web(&start, &log_tx);

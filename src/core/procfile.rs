@@ -4,10 +4,7 @@ const NAME_CMD_SEPARATOR: &str = ":";
 /// Parse Procfile lines into (name, cmd) pairs.
 /// If `names` is non-empty, only processes matching those names are returned.
 /// Lines starting with `#` are comments.
-pub fn parse<'a>(
-  input: &'a str,
-  names: &[String],
-) -> Result<Vec<(&'a str, &'a str)>, String> {
+pub fn parse<'a>(input: &'a str, names: &[String]) -> Result<Vec<(&'a str, &'a str)>, String> {
   let mut result = Vec::new();
   let mut errors = Vec::new();
 
