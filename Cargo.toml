@@ -2,7 +2,7 @@
 name = "procfile"
 version = "2.10.1"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.98"
 description = "A process manager that runs commands defined in a Procfile"
 
 [dependencies]
@@ -17,7 +17,7 @@ ratatui = "0.30"
 axum = { version = "0.8", features = ["tokio"], optional = true }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 tower-http = { version = "0.7", features = ["set-header"], optional = true }
-sysinfo = "0.38.4"
+sysinfo = "0.39.6"
 
 [features]
 default = ["web"]
