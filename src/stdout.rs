@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::io::{Write, stdout};
 use tokio::sync::{broadcast, mpsc, watch};
 
-use crate::input::{DisplayCommand, PromptState, draw_prompt};
+use crate::input::DisplayCommand;
 
 const TIMESTAMP_FORMAT: &str = "%H:%M:%S";
 const COMPACT_INDICATOR: &str = "▌";
@@ -15,12 +15,13 @@ pub struct StdoutConfig {
   pub compact: bool,
   pub no_system: bool,
   pub name_width: usize,
-  /// When Some, interactive mode is active — read the prompt from the watch channel.
-  pub interactive: Option<watch::Receiver<PromptState>>,
   /// When Some, name_width updates dynamically (for the `add` command).
   pub name_width_rx: Option<watch::Receiver<usize>>,
   /// When Some, focus/mute/clear commands are accepted.
   pub display_rx: Option<mpsc::UnboundedReceiver<DisplayCommand>>,
+  /// When Some and true, the modal owns the terminal — suppress printing so
+  /// log lines don't corrupt its alternate screen.
+  pub modal_active: Option<watch::Receiver<bool>>,
 }
 
 /// Which processes the terminal is currently showing.
@@ -96,23 +97,23 @@ pub async fn run(mut rx: broadcast::Receiver<LogEvent>, mut config: StdoutConfig
   }
 }
 
-/// Write one finished line, repainting the prompt beneath it in interactive mode.
+/// Write one finished line, unless the modal currently owns the terminal.
+///
+/// Interactive mode holds the terminal in raw mode for the whole session, so
+/// `\n` alone won't return the cursor to column 0 — every line needs an
+/// explicit `\r`. Non-interactive mode never touches raw mode, so a plain
+/// `println!` (relying on the terminal's own newline handling) is enough.
 fn emit(line: &str, config: &StdoutConfig) {
-  let Some(ref prompt_rx) = config.interactive else {
+  let Some(ref modal_active) = config.modal_active else {
     println!("{}", line);
     return;
   };
-
-  let state = prompt_rx.borrow().clone();
+  if *modal_active.borrow() {
+    return;
+  }
   let mut out = stdout();
-  let _ = execute!(
-    out,
-    cursor::MoveToColumn(0),
-    terminal::Clear(terminal::ClearType::CurrentLine),
-  );
   let _ = write!(out, "{}\r\n", line);
   let _ = out.flush();
-  draw_prompt(&state);
 }
 
 fn apply_display(filter: &mut OutputFilter, command: DisplayCommand, config: &StdoutConfig) {
@@ -151,9 +152,6 @@ fn apply_display(filter: &mut OutputFilter, command: DisplayCommand, config: &St
         cursor::MoveTo(0, 0),
       );
       let _ = out.flush();
-      if let Some(ref prompt_rx) = config.interactive {
-        draw_prompt(&prompt_rx.borrow().clone());
-      }
       return;
     }
   };

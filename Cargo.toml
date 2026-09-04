@@ -1,6 +1,6 @@
 [package]
 name = "procfile"
-version = "2.8.0"
+version = "2.9.0"
 edition = "2024"
 rust-version = "1.94"
 description = "A process manager that runs commands defined in a Procfile"
@@ -13,6 +13,7 @@ nix = { version = "0.31.2", features = ["signal"] }
 clap = { version = "4.5.37", features = ["derive"] }
 chrono = "0.4.41"
 crossterm = { version = "0.28", features = ["event-stream"] }
+ratatui = "0.29"
 axum = { version = "0.8", features = ["tokio"], optional = true }
 tokio-stream = { version = "0.1", features = ["sync"], optional = true }
 tower-http = { version = "0.6", features = ["set-header"], optional = true }

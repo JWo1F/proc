@@ -38,6 +38,26 @@ impl Display for OnExit {
   }
 }
 
+/// A point-in-time view of one process, for rendering in the interactive modal.
+#[derive(Clone, Debug)]
+pub struct ProcessSnapshot {
+  pub name: String,
+  pub command: String,
+  pub status: &'static str,
+  pub pid: Option<u32>,
+  pub uptime: Option<Duration>,
+  pub restarts: u32,
+  pub last_exit: Option<String>,
+}
+
+/// A point-in-time view of the whole session, published after every event so
+/// the modal can render live without going through the log broadcast.
+#[derive(Clone, Debug)]
+pub struct Snapshot {
+  pub mode: OnExit,
+  pub processes: Vec<ProcessSnapshot>,
+}
+
 /// All events funnelled through a single mpsc channel into the main loop.
 enum Event {
   /// A line of output from process `id`.
@@ -81,12 +101,12 @@ pub struct ProcessManager {
   input_rx: Option<mpsc::UnboundedReceiver<input::InputEvent>>,
   /// Optional watch sender for name_width updates.
   name_width_tx: Option<tokio::sync::watch::Sender<usize>>,
-  /// Optional watch sender publishing live process names for tab completion.
-  names_tx: Option<tokio::sync::watch::Sender<Vec<String>>>,
+  /// Optional watch sender publishing a full session snapshot for the modal.
+  snapshot_tx: Option<tokio::sync::watch::Sender<Snapshot>>,
 }
 
 /// Render a duration as a compact, fixed-shape uptime string.
-fn format_uptime(duration: Duration) -> String {
+pub fn format_uptime(duration: Duration) -> String {
   let seconds = duration.as_secs();
   if seconds < 60 {
     format!("{}s", seconds)
@@ -133,7 +153,7 @@ impl ProcessManager {
       next_id: entries.len(),
       input_rx: None,
       name_width_tx: None,
-      names_tx: None,
+      snapshot_tx: None,
     })
   }
 
@@ -154,27 +174,38 @@ impl ProcessManager {
     rx
   }
 
-  /// Create a watch channel publishing process names, for tab completion.
-  pub fn names_watch(&mut self) -> tokio::sync::watch::Receiver<Vec<String>> {
-    let (tx, rx) = tokio::sync::watch::channel(self.process_names());
-    self.names_tx = Some(tx);
+  /// Create a watch channel publishing a full session snapshot, for the modal.
+  pub fn snapshot_watch(&mut self) -> tokio::sync::watch::Receiver<Snapshot> {
+    let (tx, rx) = tokio::sync::watch::channel(self.snapshot());
+    self.snapshot_tx = Some(tx);
     rx
   }
 
-  /// Current process names in display order.
-  fn process_names(&self) -> Vec<String> {
-    self
-      .sorted_ids()
-      .iter()
-      .filter_map(|id| self.processes.get(id))
-      .map(|proc| proc.name.clone())
-      .collect()
+  /// Build a fresh snapshot of the current session state.
+  fn snapshot(&self) -> Snapshot {
+    Snapshot {
+      mode: self.mode,
+      processes: self
+        .sorted_ids()
+        .iter()
+        .filter_map(|id| self.processes.get(id))
+        .map(|proc| ProcessSnapshot {
+          name: proc.name.clone(),
+          command: proc.cmd.clone(),
+          status: Self::status_of(proc),
+          pid: proc.pid(),
+          uptime: proc.uptime(),
+          restarts: proc.restarts(),
+          last_exit: proc.last_exit.clone(),
+        })
+        .collect(),
+    }
   }
 
-  /// Republish the name list after the process set changes.
-  fn publish_names(&self) {
-    if let Some(ref tx) = self.names_tx {
-      let _ = tx.send(self.process_names());
+  /// Republish the snapshot after anything that could have changed it.
+  fn publish_snapshot(&self) {
+    if let Some(ref tx) = self.snapshot_tx {
+      let _ = tx.send(self.snapshot());
     }
   }
 
@@ -370,14 +401,7 @@ impl ProcessManager {
         }
       }
       input::Command::Add(name, cmd) => self.add_process(&name, &cmd),
-      input::Command::Ps => self.emit_ps(),
-      input::Command::Info(name) => self.emit_info(&name),
-      input::Command::Mode(None) => self.emit_reply(
-        "system",
-        colored::Color::White,
-        format!("On-exit mode: {}", self.mode),
-      ),
-      input::Command::Mode(Some(mode)) => {
+      input::Command::Mode(mode) => {
         if self.shutting_down {
           self.emit_error("Shutting down — the on-exit mode can no longer change");
           return;
@@ -495,7 +519,6 @@ impl ProcessManager {
       self.emit_system(proc, "Removed");
     }
     self.processes.remove(&id);
-    self.publish_names();
   }
 
   fn add_process(&mut self, name: &str, cmd: &str) {
@@ -521,8 +544,6 @@ impl ProcessManager {
       self.emit_error(&format!("Failed to start {}: {}", name, err));
       self.processes.remove(&id);
     }
-
-    self.publish_names();
   }
 
   /// One-word status for the process table.
@@ -533,80 +554,6 @@ impl ProcessManager {
       "stopped"
     } else {
       "restarting"
-    }
-  }
-
-  fn emit_ps(&self) {
-    let ids = self.sorted_ids();
-    if ids.is_empty() {
-      self.emit_reply(
-        "system",
-        colored::Color::White,
-        "No processes — use `add <name>: <command>`".to_string(),
-      );
-      return;
-    }
-
-    self.emit_reply(
-      "system",
-      colored::Color::White,
-      format!(
-        "{:<11}{:>7}{:>9}{:>10}",
-        "STATUS", "PID", "UPTIME", "RESTARTS"
-      ),
-    );
-
-    for id in ids {
-      let Some(proc) = self.processes.get(&id) else {
-        continue;
-      };
-      let pid = proc
-        .pid()
-        .map_or_else(|| "—".to_string(), |p| p.to_string());
-      let uptime = proc.uptime().map_or_else(|| "—".to_string(), format_uptime);
-
-      self.emit_reply(
-        &proc.name,
-        proc.color,
-        format!(
-          "{:<11}{:>7}{:>9}{:>10}",
-          Self::status_of(proc),
-          pid,
-          uptime,
-          proc.restarts()
-        ),
-      );
-    }
-  }
-
-  fn emit_info(&self, name: &str) {
-    let Some(id) = self.find_by_name(name) else {
-      self.emit_error(&format!("Unknown process: {}", name));
-      return;
-    };
-    let Some(proc) = self.processes.get(&id) else {
-      return;
-    };
-
-    let status = match proc.pid() {
-      Some(pid) => format!("{} (pid {})", Self::status_of(proc), pid),
-      None => Self::status_of(proc).to_string(),
-    };
-
-    let mut fields = vec![
-      format!("command:   {}", proc.cmd),
-      format!("status:    {}", status),
-    ];
-    if let Some(uptime) = proc.uptime() {
-      fields.push(format!("uptime:    {}", format_uptime(uptime)));
-    }
-    fields.push(format!("restarts:  {}", proc.restarts()));
-    if let Some(ref last_exit) = proc.last_exit {
-      fields.push(format!("last exit: {}", last_exit));
-    }
-
-    for field in fields {
-      self.emit_reply(&proc.name, proc.color, field);
     }
   }
 
@@ -706,7 +653,6 @@ impl ProcessManager {
       }
       if pending_remove {
         self.processes.remove(&id);
-        self.publish_names();
       }
       return;
     }
@@ -793,7 +739,6 @@ impl ProcessManager {
           }
         } else {
           self.processes.remove(&id);
-          self.publish_names();
         }
       }
     }
@@ -805,7 +750,6 @@ impl ProcessManager {
       && proc.stopped
     {
       self.processes.remove(&id);
-      self.publish_names();
       return;
     }
 
@@ -919,6 +863,8 @@ impl ProcessManager {
         Event::ForceKill => self.signal_all(Signal::SIGKILL, "Killing..."),
         Event::Command(cmd) => self.handle_command(cmd),
       }
+
+      self.publish_snapshot();
     }
 
     self.exit_code()

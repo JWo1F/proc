@@ -17,6 +17,7 @@ mod core;
 mod input;
 mod pipe;
 mod stdout;
+mod tui;
 #[cfg(feature = "web")]
 mod web;
 
@@ -35,7 +36,7 @@ struct RunOptions {
   #[arg(short = 'r', long = "run")]
   run: Vec<String>,
 
-  /// Behavior when a process exits [default: stop; ignore with -i]
+  /// Behavior when a process exits [default: stop; ignore in interactive mode]
   #[arg(value_enum, long)]
   on_exit: Option<OnExit>,
 
@@ -55,9 +56,9 @@ struct RunOptions {
   #[arg(long)]
   no_system: bool,
 
-  /// Enable interactive command prompt
-  #[arg(short = 'i', long)]
-  interactive: bool,
+  /// Disable interactive mode (on by default in a terminal)
+  #[arg(short = 'I', long)]
+  no_interactive: bool,
 
   /// Start SSE server (optional port, default: derived from folder name)
   #[cfg(feature = "web")]
@@ -70,14 +71,12 @@ impl RunOptions {
   ///
   /// Headless, `Stop` is right: one process dying usually invalidates the whole
   /// run. Interactively the session outlives any individual process — the
-  /// prompt is still there to inspect what happened and start it again — so a
+  /// modal is still there to inspect what happened and start it again — so a
   /// process ending on its own must not tear the session down.
-  fn effective_on_exit(&self) -> OnExit {
-    self.on_exit.unwrap_or(if self.interactive {
-      OnExit::Ignore
-    } else {
-      OnExit::Stop
-    })
+  fn effective_on_exit(&self, interactive: bool) -> OnExit {
+    self
+      .on_exit
+      .unwrap_or(if interactive { OnExit::Ignore } else { OnExit::Stop })
   }
 }
 
@@ -201,9 +200,9 @@ fn spawn_stdout(
       compact: opts.compact,
       no_system: opts.no_system,
       name_width,
-      interactive: None,
       name_width_rx: None,
       display_rx: None,
+      modal_active: None,
     },
   )))
 }
@@ -212,9 +211,9 @@ fn spawn_stdout_interactive(
   opts: &RunOptions,
   name_width: usize,
   log_tx: &broadcast::Sender<crate::core::LogEvent>,
-  prompt_rx: Option<watch::Receiver<input::PromptState>>,
   name_width_rx: Option<watch::Receiver<usize>>,
   display_rx: Option<mpsc::UnboundedReceiver<input::DisplayCommand>>,
+  modal_active: Option<watch::Receiver<bool>>,
 ) -> Option<tokio::task::JoinHandle<()>> {
   if opts.silent {
     return None;
@@ -227,9 +226,9 @@ fn spawn_stdout_interactive(
       compact: opts.compact,
       no_system: opts.no_system,
       name_width,
-      interactive: prompt_rx,
       name_width_rx,
       display_rx,
+      modal_active,
     },
   )))
 }
@@ -330,45 +329,46 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
 
   let (log_tx, _) = broadcast::channel(16384);
 
-  let mut manager =
-    match ProcessManager::new(&process_refs, start.effective_on_exit(), log_tx.clone()) {
-      Ok(m) => m,
-      Err(err) => {
-        eprintln!("{}", err);
-        return 2.into();
-      }
-    };
+  // Interactive mode needs a real terminal on both ends to draw the modal.
+  let interactive = std::io::stdout().is_terminal() && !start.no_interactive;
 
-  let interactive = start.interactive;
+  let mut manager = match ProcessManager::new(
+    &process_refs,
+    start.effective_on_exit(interactive),
+    log_tx.clone(),
+  ) {
+    Ok(m) => m,
+    Err(err) => {
+      eprintln!("{}", err);
+      return 2.into();
+    }
+  };
 
   // Set up interactive mode channels
-  let (prompt_rx, name_width_rx, display_rx, raw_guard) = if interactive {
+  let (name_width_rx, display_rx, modal_rx, raw_guard) = if interactive {
     let (input_tx, input_rx) = mpsc::unbounded_channel();
     let (display_tx, display_rx) = mpsc::unbounded_channel();
-    let (prompt_tx, prompt_rx) = watch::channel(input::PromptState::default());
+    let (key_tx, key_rx) = mpsc::unbounded_channel();
+    let (modal_tx, modal_rx) = watch::channel(false);
     let name_width_rx = manager.name_width_watch();
-    let names_rx = manager.names_watch();
+    let snapshot_rx = manager.snapshot_watch();
     manager.set_input_rx(input_rx);
 
     // Install panic hook and enable raw mode
     input::install_panic_hook();
     let guard = input::RawModeGuard::new().expect("Failed to enable raw terminal mode");
 
-    // Spawn the input reading task
+    // Spawn the terminal event reader and the key-handling loop
+    tokio::spawn(input::read_events(key_tx));
     tokio::spawn(input::run(
       input_tx,
       display_tx,
-      prompt_tx,
-      names_rx,
-      log_tx.clone(),
+      modal_tx,
+      snapshot_rx,
+      key_rx,
     ));
 
-    (
-      Some(prompt_rx),
-      Some(name_width_rx),
-      Some(display_rx),
-      Some(guard),
-    )
+    (Some(name_width_rx), Some(display_rx), Some(modal_rx), Some(guard))
   } else {
     (None, None, None, None)
   };
@@ -377,10 +377,20 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     &start,
     manager.name_width(),
     &log_tx,
-    prompt_rx,
     name_width_rx,
     display_rx,
+    modal_rx,
   );
+
+  if interactive {
+    let _ = log_tx.send(crate::core::LogEvent {
+      process: "system".to_string(),
+      color: colored::Color::White,
+      line: "Interactive mode — press G to open the menu".to_string(),
+      system: true,
+      reply: false,
+    });
+  }
 
   #[cfg(feature = "web")]
   maybe_spawn_web(&start, &log_tx);
@@ -423,7 +433,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
       "Fin. May your deploys be boring.",
     ];
     let idx = (std::process::id() as usize) % FAREWELLS.len();
-    print!("\r{}{}\r\n", input::PROMPT, FAREWELLS[idx]);
+    println!("{}", FAREWELLS[idx]);
     std::process::exit(code as i32);
   }
 
