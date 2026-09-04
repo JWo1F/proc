@@ -3,6 +3,7 @@ pub mod color;
 pub mod manager;
 pub mod process;
 pub mod procfile;
+pub mod resources;
 
 use colored::Color;
 

@@ -350,6 +350,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     let (display_tx, display_rx) = mpsc::unbounded_channel();
     let (key_tx, key_rx) = mpsc::unbounded_channel();
     let (modal_tx, modal_rx) = watch::channel(false);
+    let (resources_tx, resources_rx) = watch::channel(core::resources::ResourceMap::new());
     let name_width_rx = manager.name_width_watch();
     let snapshot_rx = manager.snapshot_watch();
     manager.set_input_rx(input_rx);
@@ -358,6 +359,13 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     input::install_panic_hook();
     let guard = input::RawModeGuard::new().expect("Failed to enable raw terminal mode");
 
+    // The resource sampler blocks on syscalls, so it gets its own OS thread
+    // rather than a tokio task — this runtime is single-threaded.
+    std::thread::spawn({
+      let snapshot_rx = snapshot_rx.clone();
+      move || core::resources::run_sampler(snapshot_rx, resources_tx)
+    });
+
     // Spawn the terminal event reader and the key-handling loop
     tokio::spawn(input::read_events(key_tx));
     tokio::spawn(input::run(
@@ -365,6 +373,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
       display_tx,
       modal_tx,
       snapshot_rx,
+      resources_rx,
       key_rx,
     ));
 

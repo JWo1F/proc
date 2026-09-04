@@ -1,29 +1,38 @@
 use super::app::{
   ALL_ACTION_ITEMS, AddField, App, Item, MAIN_ITEMS, MODE_ITEMS, PROCESS_ACTION_ITEMS, Screen,
 };
-use crate::core::manager::{OnExit, format_uptime};
+use crate::core::manager::{OnExit, ProcessSnapshot, format_uptime};
+use crate::core::resources::{ResourceHistory, ResourceMap};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{
   Block, BorderType, Borders, Cell, Clear, List, ListItem, ListState, Padding, Paragraph, Row,
-  Table, Wrap,
+  Sparkline, Table, Wrap,
 };
 
 const ACCENT: Color = Color::Cyan;
 const MUTED: Color = Color::DarkGray;
 const WARN: Color = Color::Yellow;
 const RUNNING: Color = Color::Green;
+const MEM_COLOR: Color = Color::Magenta;
+const CPU_COLOR: Color = Color::Blue;
 
 const BOX_WIDTH: u16 = 64;
+const WIDE_BOX_WIDTH: u16 = 78;
 const MIN_HEIGHT: u16 = 11;
 // borders(2) + padding(2) + breadcrumb(1) + separator×2(2) + footer(1)
 const CHROME_HEIGHT: u16 = 8;
 
 pub fn render(frame: &mut Frame, app: &App) {
   let outer = frame.area();
-  let area = modal_rect(BOX_WIDTH, content_height(app), outer);
+  let screen = app.stack.last().expect("stack is never empty");
+  let width = match screen {
+    Screen::Info { .. } | Screen::Dashboard => WIDE_BOX_WIDTH,
+    _ => BOX_WIDTH,
+  };
+  let area = modal_rect(width, content_height(app), outer);
   frame.render_widget(Clear, area);
 
   let block = Block::default()
@@ -62,8 +71,11 @@ fn content_height(app: &App) -> u16 {
     Screen::AllActions { .. } => ALL_ACTION_ITEMS.len(),
     Screen::ModeMenu { .. } => MODE_ITEMS.len(),
     Screen::AddProcess { .. } => 6,
-    Screen::Info { .. } => 5,
+    // 7 text fields at most + a blank line + two 4-row graph panels.
+    Screen::Info { .. } => 7 + 1 + 4 + 4,
     Screen::Ps => app.snapshot.processes.len().max(1) + 1,
+    // Summary + two 4-row graph panels + blank spacer + table header + one row per process.
+    Screen::Dashboard => 1 + 4 + 4 + 1 + 1 + app.snapshot.processes.len().max(1),
     Screen::ConfirmQuit => 1,
   };
   (rows as u16 + CHROME_HEIGHT).max(MIN_HEIGHT)
@@ -100,6 +112,7 @@ fn label(screen: &Screen) -> String {
     Screen::AddProcess { .. } => "Add process".to_string(),
     Screen::Info { name } => format!("{} — info", name),
     Screen::Ps => "Ps".to_string(),
+    Screen::Dashboard => "Dashboard".to_string(),
     Screen::ConfirmQuit => "Quit".to_string(),
   }
 }
@@ -169,6 +182,8 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
     Screen::Info { name } => render_info(frame, area, name, app),
 
     Screen::Ps => render_ps(frame, area, app),
+
+    Screen::Dashboard => render_dashboard(frame, area, app),
 
     Screen::ConfirmQuit => {
       let p = Paragraph::new("Stop all processes and quit?")
@@ -251,6 +266,7 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
     render_empty(frame, area, "Process no longer exists.");
     return;
   };
+  let resources = app.resources.get(name);
 
   let status = match proc.pid {
     Some(pid) => format!("{} (pid {})", proc.status, pid),
@@ -272,8 +288,223 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
   if let Some(ref last_exit) = proc.last_exit {
     lines.push(field("Last exit", last_exit.clone()));
   }
+  if let Some(r) = resources {
+    lines.push(field("Processes", r.current.process_count.to_string()));
+    lines.push(field("Threads", format_thread_count(r.current.thread_count)));
+  }
 
-  frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+  let rows = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+      Constraint::Length(lines.len() as u16),
+      Constraint::Length(1),
+      Constraint::Length(4),
+      Constraint::Length(4),
+      Constraint::Min(0),
+    ])
+    .split(area);
+
+  frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), rows[0]);
+
+  match resources {
+    Some(r) => {
+      let mem_mb: Vec<u64> = r.mem_history.iter().copied().collect();
+      let cpu_pct: Vec<u64> = r.cpu_history.iter().copied().collect();
+      render_metric_panel(
+        frame,
+        rows[2],
+        "Memory",
+        format!("{} MB", r.current.mem_bytes / (1024 * 1024)),
+        &mem_mb,
+        MEM_COLOR,
+      );
+      render_metric_panel(
+        frame,
+        rows[3],
+        "CPU",
+        format!("{:.1}%", r.current.cpu_percent),
+        &cpu_pct,
+        CPU_COLOR,
+      );
+    }
+    None => {
+      render_metric_panel(frame, rows[2], "Memory", "warming up…".to_string(), &[], MEM_COLOR);
+      render_metric_panel(frame, rows[3], "CPU", "warming up…".to_string(), &[], CPU_COLOR);
+    }
+  }
+}
+
+/// A bordered panel showing a metric's current value in the title and its
+/// recent history as a sparkline underneath.
+fn render_metric_panel(
+  frame: &mut Frame,
+  area: Rect,
+  label: &str,
+  current: String,
+  history: &[u64],
+  color: Color,
+) {
+  let block = Block::default()
+    .title(Span::styled(
+      format!(" {} · {} ", label, current),
+      Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
+    .borders(Borders::ALL)
+    .border_type(BorderType::Rounded)
+    .border_style(Style::default().fg(MUTED));
+  let inner = block.inner(area);
+  frame.render_widget(block, area);
+
+  let sparkline = Sparkline::default()
+    .data(history)
+    .style(Style::default().fg(color));
+  frame.render_widget(sparkline, inner);
+}
+
+fn format_thread_count(count: usize) -> String {
+  if count == 0 {
+    // sysinfo can only report thread counts on Linux; elsewhere this is
+    // "unknown", not "zero threads" (every live process has at least one).
+    "—".to_string()
+  } else {
+    count.to_string()
+  }
+}
+
+fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
+  if app.snapshot.processes.is_empty() {
+    render_empty(frame, area, "No processes — add one from the main menu.");
+    return;
+  }
+
+  let names: Vec<String> = app.snapshot.processes.iter().map(|p| p.name.clone()).collect();
+  let totals = |pick: fn(&ResourceHistory) -> f64| -> f64 {
+    names.iter().filter_map(|n| app.resources.get(n)).map(pick).sum()
+  };
+  let total_cpu = totals(|r| r.current.cpu_percent as f64) as f32;
+  let total_mem_mb = (totals(|r| r.current.mem_bytes as f64) / (1024.0 * 1024.0)) as u64;
+  let total_procs = totals(|r| r.current.process_count as f64) as usize;
+
+  let summary = Line::from(vec![
+    Span::styled("CPU ", Style::default().fg(MUTED)),
+    Span::styled(
+      format!("{:.1}%", total_cpu),
+      Style::default().fg(CPU_COLOR).add_modifier(Modifier::BOLD),
+    ),
+    Span::raw("    "),
+    Span::styled("Memory ", Style::default().fg(MUTED)),
+    Span::styled(
+      format!("{} MB", total_mem_mb),
+      Style::default().fg(MEM_COLOR).add_modifier(Modifier::BOLD),
+    ),
+    Span::raw("    "),
+    Span::styled("Processes ", Style::default().fg(MUTED)),
+    Span::styled(
+      format!("{} across {} groups", total_procs, names.len()),
+      Style::default().add_modifier(Modifier::BOLD),
+    ),
+  ]);
+
+  let rows = Layout::default()
+    .direction(Direction::Vertical)
+    .constraints([
+      Constraint::Length(1),
+      Constraint::Length(4),
+      Constraint::Length(4),
+      Constraint::Length(1),
+      Constraint::Min(1),
+    ])
+    .split(area);
+
+  frame.render_widget(Paragraph::new(summary), rows[0]);
+
+  let mem_hist = aggregate_history(&app.resources, &names, |r| &r.mem_history);
+  let cpu_hist = aggregate_history(&app.resources, &names, |r| &r.cpu_history);
+  render_metric_panel(
+    frame,
+    rows[1],
+    "Memory (total)",
+    format!("{} MB", total_mem_mb),
+    &mem_hist,
+    MEM_COLOR,
+  );
+  render_metric_panel(
+    frame,
+    rows[2],
+    "CPU (total)",
+    format!("{:.1}%", total_cpu),
+    &cpu_hist,
+    CPU_COLOR,
+  );
+
+  render_process_table(frame, rows[4], app);
+}
+
+/// Sum a per-process history metric across all groups, right-aligned so
+/// samples from before a process existed count as 0 rather than misaligning
+/// the series.
+fn aggregate_history(
+  resources: &ResourceMap,
+  names: &[String],
+  pick: impl Fn(&ResourceHistory) -> &std::collections::VecDeque<u64>,
+) -> Vec<u64> {
+  let max_len = names
+    .iter()
+    .filter_map(|n| resources.get(n))
+    .map(|r| pick(r).len())
+    .max()
+    .unwrap_or(0);
+  let mut result = vec![0u64; max_len];
+  for name in names {
+    let Some(r) = resources.get(name) else { continue };
+    let history = pick(r);
+    let offset = max_len - history.len();
+    for (i, value) in history.iter().enumerate() {
+      result[offset + i] += value;
+    }
+  }
+  result
+}
+
+fn render_process_table(frame: &mut Frame, area: Rect, app: &App) {
+  let header = Row::new(vec!["NAME", "STATUS", "CPU%", "MEM MB", "PROCS", "THRD"])
+    .style(Style::default().fg(MUTED).add_modifier(Modifier::BOLD));
+
+  let rows = app.snapshot.processes.iter().map(|p| dashboard_row(p, app.resources.get(&p.name)));
+
+  let widths = [
+    Constraint::Length(14),
+    Constraint::Length(10),
+    Constraint::Length(7),
+    Constraint::Length(9),
+    Constraint::Length(7),
+    Constraint::Length(6),
+  ];
+
+  let table = Table::new(rows, widths).header(header).column_spacing(1);
+  frame.render_widget(table, area);
+}
+
+fn dashboard_row<'a>(proc: &'a ProcessSnapshot, resources: Option<&ResourceHistory>) -> Row<'a> {
+  let (cpu, mem, procs, threads) = match resources {
+    Some(r) => (
+      format!("{:.1}", r.current.cpu_percent),
+      (r.current.mem_bytes / (1024 * 1024)).to_string(),
+      r.current.process_count.to_string(),
+      format_thread_count(r.current.thread_count),
+    ),
+    None => ("—".to_string(), "—".to_string(), "—".to_string(), "—".to_string()),
+  };
+
+  Row::new(vec![
+    Cell::from(proc.name.clone()),
+    Cell::from(proc.status),
+    Cell::from(cpu),
+    Cell::from(mem),
+    Cell::from(procs),
+    Cell::from(threads),
+  ])
+  .style(status_style(proc.status))
 }
 
 fn render_ps(frame: &mut Frame, area: Rect, app: &App) {
@@ -316,7 +547,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
   let hint = match app.stack.last().expect("stack is never empty") {
     Screen::AddProcess { .. } => "Tab  switch field    Enter  next / submit    Esc  cancel",
     Screen::ConfirmQuit => "Y  confirm    N / Esc  cancel",
-    Screen::Info { .. } | Screen::Ps => "Esc  back",
+    Screen::Info { .. } | Screen::Ps | Screen::Dashboard => "Esc  back",
     _ => "↑↓  move    Enter  select    letter  jump    Esc  back",
   };
   frame.render_widget(

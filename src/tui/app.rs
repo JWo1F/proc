@@ -1,4 +1,5 @@
 use crate::core::manager::{OnExit, Snapshot};
+use crate::core::resources::ResourceMap;
 use crate::input::{Command, DisplayCommand, InputEvent, Target};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tokio::sync::mpsc::UnboundedSender;
@@ -12,6 +13,7 @@ pub const MAIN_ITEMS: &[Item] = &[
   ('a', "Add process"),
   ('l', "All processes"),
   ('m', "Mode"),
+  ('d', "Dashboard"),
   ('s', "Ps — process table"),
   ('q', "Quit"),
 ];
@@ -93,6 +95,7 @@ pub enum Screen {
     name: String,
   },
   Ps,
+  Dashboard,
   ConfirmQuit,
 }
 
@@ -112,12 +115,14 @@ enum Peek {
   },
   Info,
   Ps,
+  Dashboard,
   ConfirmQuit,
 }
 
 pub struct App {
   pub stack: Vec<Screen>,
   pub snapshot: Snapshot,
+  pub resources: ResourceMap,
   pub should_close: bool,
 }
 
@@ -131,10 +136,11 @@ fn nav_delta(selected: usize, len: usize, code: KeyCode) -> Option<usize> {
 }
 
 impl App {
-  pub fn new(snapshot: Snapshot) -> Self {
+  pub fn new(snapshot: Snapshot, resources: ResourceMap) -> Self {
     Self {
       stack: vec![Screen::Main { selected: 0 }],
       snapshot,
+      resources,
       should_close: false,
     }
   }
@@ -160,6 +166,7 @@ impl App {
       },
       Screen::Info { .. } => Peek::Info,
       Screen::Ps => Peek::Ps,
+      Screen::Dashboard => Peek::Dashboard,
       Screen::ConfirmQuit => Peek::ConfirmQuit,
     }
   }
@@ -259,8 +266,9 @@ impl App {
       }),
       2 => self.push(Screen::AllActions { selected: 0 }),
       3 => self.push(Screen::ModeMenu { selected: 0 }),
-      4 => self.push(Screen::Ps),
-      5 => self.push(Screen::ConfirmQuit),
+      4 => self.push(Screen::Dashboard),
+      5 => self.push(Screen::Ps),
+      6 => self.push(Screen::ConfirmQuit),
       _ => {}
     }
   }
@@ -466,6 +474,12 @@ impl App {
       }
 
       Peek::Ps => {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+          self.pop();
+        }
+      }
+
+      Peek::Dashboard => {
         if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
           self.pop();
         }

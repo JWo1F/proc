@@ -92,6 +92,7 @@ pub async fn run(
   display_tx: mpsc::UnboundedSender<DisplayCommand>,
   modal_active: watch::Sender<bool>,
   mut snapshot_rx: watch::Receiver<Snapshot>,
+  mut resources_rx: watch::Receiver<crate::core::resources::ResourceMap>,
   mut key_rx: mpsc::UnboundedReceiver<Event>,
 ) {
   loop {
@@ -125,7 +126,14 @@ pub async fn run(
       }
       KeyCode::Char('g' | 'G') if !ctrl => {
         let _ = modal_active.send(true);
-        crate::tui::run(&input_tx, &display_tx, &mut snapshot_rx, &mut key_rx).await;
+        crate::tui::run(
+          &input_tx,
+          &display_tx,
+          &mut snapshot_rx,
+          &mut resources_rx,
+          &mut key_rx,
+        )
+        .await;
         let _ = modal_active.send(false);
       }
       _ => {}
