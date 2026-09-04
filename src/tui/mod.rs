@@ -9,7 +9,7 @@ use crossterm::event::{Event, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::Terminal;
-use ratatui::backend::CrosstermBackend;
+use ratatui::backend::{Backend, CrosstermBackend};
 use std::io::stdout;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -39,7 +39,13 @@ pub async fn run(
     }
   };
   let _ = terminal.hide_cursor();
-  let _ = terminal.clear();
+  // `Terminal::clear` first asks the terminal where the cursor is, and that
+  // query blocks for a full two seconds here: the reply arrives on stdin,
+  // where the dedicated event-reader thread swallows it, so crossterm waits
+  // out its timeout on every open. Clear through the backend instead — the
+  // alternate screen starts blank and this Terminal's buffers are empty, so
+  // the buffer reset `Terminal::clear` would also do is a no-op.
+  let _ = terminal.backend_mut().clear();
 
   let mut app = App::new(snapshot_rx.borrow().clone(), resources_rx.borrow().clone());
   let mut tick = tokio::time::interval(TICK_INTERVAL);
