@@ -315,6 +315,7 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
         rows[2],
         "Memory",
         format!("{} MB", r.current.mem_bytes / (1024 * 1024)),
+        Some(format!("{} MB", r.peak_mem_bytes / (1024 * 1024))),
         &mem_mb,
         MEM_COLOR,
       );
@@ -323,13 +324,14 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
         rows[3],
         "CPU",
         format!("{:.1}%", r.current.cpu_percent),
+        Some(format!("{:.1}%", r.peak_cpu_percent)),
         &cpu_pct,
         CPU_COLOR,
       );
     }
     None => {
-      render_metric_panel(frame, rows[2], "Memory", "warming up…".to_string(), &[], MEM_COLOR);
-      render_metric_panel(frame, rows[3], "CPU", "warming up…".to_string(), &[], CPU_COLOR);
+      render_metric_panel(frame, rows[2], "Memory", "warming up…".to_string(), None, &[], MEM_COLOR);
+      render_metric_panel(frame, rows[3], "CPU", "warming up…".to_string(), None, &[], CPU_COLOR);
     }
   }
 }
@@ -341,12 +343,17 @@ fn render_metric_panel(
   area: Rect,
   label: &str,
   current: String,
+  peak: Option<String>,
   history: &[u64],
   color: Color,
 ) {
+  let title = match peak {
+    Some(peak) => format!(" {} · {}  (peak {}) ", label, current, peak),
+    None => format!(" {} · {} ", label, current),
+  };
   let block = Block::default()
     .title(Span::styled(
-      format!(" {} · {} ", label, current),
+      title,
       Style::default().fg(color).add_modifier(Modifier::BOLD),
     ))
     .borders(Borders::ALL)
@@ -355,8 +362,12 @@ fn render_metric_panel(
   let inner = block.inner(area);
   frame.render_widget(block, area);
 
+  // One bar per data point: show only the most recent `inner.width` samples
+  // so the graph always fills the panel instead of leaving empty columns on
+  // the right once there's more history than the panel is wide.
+  let visible = &history[history.len().saturating_sub(inner.width as usize)..];
   let sparkline = Sparkline::default()
-    .data(history)
+    .data(visible)
     .style(Style::default().fg(color));
   frame.render_widget(sparkline, inner);
 }
@@ -384,6 +395,10 @@ fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
   let total_cpu = totals(|r| r.current.cpu_percent as f64) as f32;
   let total_mem_mb = (totals(|r| r.current.mem_bytes as f64) / (1024.0 * 1024.0)) as u64;
   let total_procs = totals(|r| r.current.process_count as f64) as usize;
+  // Sum of each process's own all-time peak — not the historical peak of the
+  // combined total, but a reasonable "worst case across the board" reading.
+  let peak_cpu = totals(|r| r.peak_cpu_percent as f64) as f32;
+  let peak_mem_mb = (totals(|r| r.peak_mem_bytes as f64) / (1024.0 * 1024.0)) as u64;
 
   let summary = Line::from(vec![
     Span::styled("CPU ", Style::default().fg(MUTED)),
@@ -425,6 +440,7 @@ fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     rows[1],
     "Memory (total)",
     format!("{} MB", total_mem_mb),
+    Some(format!("{} MB", peak_mem_mb)),
     &mem_hist,
     MEM_COLOR,
   );
@@ -433,6 +449,7 @@ fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     rows[2],
     "CPU (total)",
     format!("{:.1}%", total_cpu),
+    Some(format!("{:.1}%", peak_cpu)),
     &cpu_hist,
     CPU_COLOR,
   );

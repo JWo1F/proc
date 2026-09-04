@@ -10,7 +10,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::watch;
 
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
-const HISTORY_LEN: usize = 60;
+// Comfortably wider than the metric panels' inner width (~70 cols at the
+// modal's widest) so the sparkline always has enough samples to fill them.
+const HISTORY_LEN: usize = 90;
 
 /// A single point-in-time reading for one process's whole group (the shell
 /// plus everything it has spawned).
@@ -22,17 +24,22 @@ pub struct ResourceSample {
   pub thread_count: usize,
 }
 
-/// The latest sample plus a rolling window of memory/CPU readings, for the
-/// Info view's sparklines.
+/// The latest sample, a rolling window of memory/CPU readings for the Info
+/// view's sparklines, and the all-time high for each — tracked for the life
+/// of the session, independent of how far the rolling window has scrolled.
 #[derive(Clone, Debug, Default)]
 pub struct ResourceHistory {
   pub current: ResourceSample,
+  pub peak_mem_bytes: u64,
+  pub peak_cpu_percent: f32,
   pub mem_history: VecDeque<u64>,
   pub cpu_history: VecDeque<u64>,
 }
 
 impl ResourceHistory {
   fn push(&mut self, sample: ResourceSample) {
+    self.peak_mem_bytes = self.peak_mem_bytes.max(sample.mem_bytes);
+    self.peak_cpu_percent = self.peak_cpu_percent.max(sample.cpu_percent);
     push_capped(&mut self.mem_history, sample.mem_bytes / (1024 * 1024));
     push_capped(&mut self.cpu_history, sample.cpu_percent.round() as u64);
     self.current = sample;
