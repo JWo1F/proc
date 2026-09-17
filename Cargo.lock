@@ -1173,7 +1173,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "proc"
-version = "2.13.0"
+version = "2.14.0"
 dependencies = [
  "chrono",
  "clap",
