@@ -25,6 +25,15 @@ Because every process gets a real PTY, programs that check `isatty` behave as th
 
 ## Install
 
+Every release carries prebuilt binaries for macOS (Apple Silicon and Intel) and Linux (arm64 and x86_64). The Linux builds are statically linked against musl, so they run on any distribution:
+
+```bash
+tar -xzf proc-<version>-<target>.tar.gz
+./proc-<version>-<target>/proc --help
+```
+
+Or build it yourself:
+
 ```bash
 git clone https://github.com/JWo1F/proc.git
 cd proc
