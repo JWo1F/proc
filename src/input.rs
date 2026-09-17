@@ -28,8 +28,8 @@ pub enum Command {
 }
 
 /// A command that only affects how output is rendered. Handled by the stdout
-/// consumer, never by the manager — filtering the broadcast itself would
-/// starve the web/SSE consumer of lines it never asked to hide.
+/// consumer, never by the manager — the broadcast carries every line, and
+/// hiding one is a rendering decision.
 #[derive(Debug, PartialEq, Clone)]
 pub enum DisplayCommand {
   /// `Some(name)` shows only that process; `None` restores everything.

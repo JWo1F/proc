@@ -8,7 +8,7 @@ pub mod resources;
 use colored::Color;
 
 /// A log event emitted by the process manager.
-/// Consumers (stdout, web) receive these via broadcast channel.
+/// Consumers receive these via broadcast channel.
 #[derive(Clone, Debug)]
 pub struct LogEvent {
   /// The process name that produced this line.

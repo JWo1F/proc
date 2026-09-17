@@ -16,7 +16,6 @@ pub struct StdoutConfig {
   pub no_system: bool,
   pub name_width: usize,
   /// Processes declared `muted`, hidden from the terminal from the first line.
-  /// They still reach the web/SSE consumer, which reads the same broadcast.
   pub muted: Vec<String>,
   /// When Some, name_width updates dynamically (for the `add` command).
   pub name_width_rx: Option<watch::Receiver<usize>>,

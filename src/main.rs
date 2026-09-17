@@ -4,7 +4,7 @@
 //! multiplexed to stdout with a colored name prefix.
 //!
 //! Also supports pipe mode: `my_command | proc` reads stdin and
-//! displays it through the same stdout/web consumers.
+//! displays it through the same stdout consumer.
 
 use crate::core::manager::{OnExit, ProcessManager};
 use crate::core::procfile::ProcessSpec;
@@ -19,8 +19,6 @@ mod input;
 mod pipe;
 mod stdout;
 mod tui;
-#[cfg(feature = "web")]
-mod web;
 
 const DEFAULT_CONFIG: &str = "Procfile";
 
@@ -57,7 +55,7 @@ struct RunOptions {
   #[arg(short = 's', long)]
   compact: bool,
 
-  /// Suppress log output to stdout (use with -w for web-only)
+  /// Suppress log output to stdout
   #[arg(short = 'q', long)]
   silent: bool,
 
@@ -69,10 +67,6 @@ struct RunOptions {
   #[arg(short = 'I', long)]
   no_interactive: bool,
 
-  /// Start SSE server (optional port, default: derived from folder name)
-  #[cfg(feature = "web")]
-  #[arg(short = 'w', long, num_args = 0..=1, default_missing_value = "0")]
-  web: Option<u16>,
 }
 
 impl RunOptions {
@@ -109,8 +103,7 @@ Process flags (comma separated, apply to that one process only):
   stop            stop the whole run when it exits
   delay=<dur>     hold its automatic start (500ms, 2s, 1m; bare = seconds)
   retries=<n>     give up after n consecutive automatic restarts
-  muted           keep its output out of the terminal (the web feed
-                  still receives it)
+  muted           keep its output out of the terminal
   allow-failure   a non-zero exit from it does not fail the run
 
   Only one of once/restart/stop per process — they are the same setting.
@@ -206,19 +199,6 @@ fn read_and_parse(config_path: &str) -> Result<Vec<ProcessSpec>, ExitCode> {
       eprintln!("{}\n{}", config_path, err);
       ExitCode::from(2)
     })
-}
-
-/// Spawn the web UI server if the feature is enabled and a port is requested.
-#[cfg(feature = "web")]
-fn maybe_spawn_web(opts: &RunOptions, log_tx: &broadcast::Sender<crate::core::LogEvent>) {
-  if let Some(port) = opts.web {
-    let rx = log_tx.subscribe();
-    let resolved_port = if port == 0 { web::port_for_cwd() } else { port };
-    let no_system = opts.no_system;
-    tokio::spawn(async move {
-      web::start(rx, resolved_port, no_system).await;
-    });
-  }
 }
 
 /// Spawn the stdout consumer task if not silent.
@@ -466,25 +446,11 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     });
   }
 
-  #[cfg(feature = "web")]
-  maybe_spawn_web(&start, &log_tx);
-
   let code = manager.start(interactive).await;
   drop(manager);
 
   // Drop raw mode guard explicitly (restores terminal)
   drop(raw_guard);
-
-  #[cfg(feature = "web")]
-  if start.web.is_some() {
-    drop(log_tx);
-    if let Some(handle) = stdout_handle {
-      let _ = handle.await;
-    }
-    eprintln!("SSE server still running. Press Ctrl+C to quit.");
-    let _ = tokio::signal::ctrl_c().await;
-    return code.into();
-  }
 
   if interactive {
     // Close broadcast so stdout consumer drains remaining messages then exits.
@@ -524,9 +490,6 @@ async fn cmd_start_pipe(start: RunOptions) -> ExitCode {
   let (log_tx, _) = broadcast::channel(16384);
 
   let stdout_handle = spawn_stdout(&start, "stdin".len(), &log_tx);
-
-  #[cfg(feature = "web")]
-  maybe_spawn_web(&start, &log_tx);
 
   let exit_code = pipe::run(log_tx).await;
 

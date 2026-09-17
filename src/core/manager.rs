@@ -112,7 +112,7 @@ pub struct ProcessManager {
   failed: bool,
   /// Set once graceful shutdown has been initiated (SIGINT sent).
   shutting_down: bool,
-  /// Broadcast channel for log consumers (stdout, web).
+  /// Broadcast channel for log consumers.
   log_tx: broadcast::Sender<LogEvent>,
   /// Next process ID for dynamically added processes.
   next_id: usize,
@@ -382,7 +382,7 @@ impl ProcessManager {
     ids
   }
 
-  /// Send a log event to all consumers (stdout, web).
+  /// Send a log event to all consumers.
   fn emit(&self, proc: &Process, line: &str, system: bool) {
     let _ = self.log_tx.send(LogEvent {
       process: proc.name.clone(),

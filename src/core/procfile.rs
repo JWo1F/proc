@@ -32,7 +32,6 @@ pub struct Flags {
   /// `None` means it follows whatever the session is set to.
   pub on_exit: Option<OnExit>,
   /// Declared `muted`: its output stays out of the terminal from the start.
-  /// The web/SSE feed still receives every line.
   pub muted: bool,
   /// Declared `allow-failure`: a non-zero exit from this process does not make
   /// the run as a whole fail.

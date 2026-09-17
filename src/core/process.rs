@@ -47,7 +47,7 @@ pub struct Process {
   /// Whether an `optional` process has been brought into the run yet.
   /// Always true for a process without the flag.
   pub(crate) enabled: bool,
-  /// Declared `muted`: kept out of the terminal, still sent to the web feed.
+  /// Declared `muted`: its output is kept out of the terminal.
   pub(crate) muted: bool,
   /// Declared `allow-failure`: a non-zero exit from this process does not
   /// make the run as a whole fail.
