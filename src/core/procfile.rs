@@ -2,7 +2,7 @@ use super::manager::OnExit;
 use std::time::Duration;
 
 const COMMENT_PREFIX: char = '#';
-const NAME_CMD_SEPARATOR: &str = ":";
+const NAME_CMD_SEPARATOR: char = ':';
 const FLAGS_OPEN: char = '(';
 const FLAGS_CLOSE: char = ')';
 
@@ -14,9 +14,11 @@ const MUTED: &str = "muted";
 const ALLOW_FAILURE: &str = "allow-failure";
 const DELAY: &str = "delay";
 const RETRIES: &str = "retries";
+/// Separates a value-carrying flag from its value, as in `delay:2s`.
+const FLAG_VALUE_SEPARATOR: char = ':';
 
 const KNOWN_FLAGS: &str =
-  "optional, once, restart, stop, muted, allow-failure, delay=<duration>, retries=<n>";
+  "optional, once, restart, stop, muted, allow-failure, delay:<duration>, retries:<n>";
 
 /// Per-process options declared in parentheses after the name:
 /// `worker(once, optional): rake jobs:work`.
@@ -57,10 +59,10 @@ impl Flags {
       None => {}
     }
     if let Some(delay) = self.delay {
-      labels.push(format!("{}={}", DELAY, format_duration(delay)));
+      labels.push(format!("{}{}{}", DELAY, FLAG_VALUE_SEPARATOR, format_duration(delay)));
     }
     if let Some(retries) = self.retries {
-      labels.push(format!("{}={}", RETRIES, retries));
+      labels.push(format!("{}{}{}", RETRIES, FLAG_VALUE_SEPARATOR, retries));
     }
     if self.muted {
       labels.push(MUTED.to_string());
@@ -184,7 +186,7 @@ pub fn parse_name(head: &str) -> Result<(&str, Flags), String> {
 /// so both `allow-failure` and `allow_failure` work.
 fn apply_flag(flags: &mut Flags, token: &str) -> Result<(), String> {
   let normalized = token.to_ascii_lowercase().replace('_', "-");
-  let (key, value) = match normalized.split_once('=') {
+  let (key, value) = match normalized.split_once(FLAG_VALUE_SEPARATOR) {
     Some((key, value)) => (key.trim(), Some(value.trim())),
     None => (normalized.as_str(), None),
   };
@@ -219,7 +221,10 @@ fn apply_flag(flags: &mut Flags, token: &str) -> Result<(), String> {
       return Ok(());
     }
     (DELAY | RETRIES, None) => {
-      return Err(format!("needs a value for {:?}, as in {}=2", key, key));
+      return Err(format!(
+        "needs a value for {:?}, as in {}{}2",
+        key, key, FLAG_VALUE_SEPARATOR
+      ));
     }
     (_, Some(_)) => {
       return Err(format!(
@@ -276,14 +281,35 @@ fn apply_flag(flags: &mut Flags, token: &str) -> Result<(), String> {
   }
 }
 
+/// Split a line at the separator between the name and the command, ignoring
+/// any separator inside a flag list so `web(delay:2s): cmd` splits after the
+/// closing parenthesis.
+fn split_head_cmd(line: &str) -> Result<(&str, &str), String> {
+  let mut depth = 0usize;
+  for (i, ch) in line.char_indices() {
+    match ch {
+      FLAGS_OPEN => depth += 1,
+      FLAGS_CLOSE => depth = depth.saturating_sub(1),
+      NAME_CMD_SEPARATOR if depth == 0 => {
+        return Ok((&line[..i], &line[i + ch.len_utf8()..]));
+      }
+      _ => {}
+    }
+  }
+
+  if depth > 0 {
+    return Err(format!("has an unclosed '{}' in its flag list", FLAGS_OPEN));
+  }
+
+  Err("should contain name and command".to_string())
+}
+
 /// Parse a single `name: command` line (flags optional).
 ///
 /// The error is a bare phrase like `"doesn't have a name"` so that both the
 /// Procfile reader and `--run` can wrap it in their own context.
 pub fn parse_line(line: &str) -> Result<ProcessDef<'_>, String> {
-  let Some((head, cmd)) = line.split_once(NAME_CMD_SEPARATOR) else {
-    return Err("should contain name and command".to_string());
-  };
+  let (head, cmd) = split_head_cmd(line)?;
 
   let (name, flags) = parse_name(head)?;
   let cmd = cmd.trim();
@@ -439,13 +465,13 @@ mod tests {
       "web(allow-failure, allow_failure)",
       "web(delay)",
       "web(retries)",
-      "web(delay=soon)",
-      "web(delay=2h)",
-      "web(retries=many)",
-      "web(retries=-1)",
-      "web(delay=1s, delay=2s)",
-      "web(retries=1, retries=2)",
-      "web(nope=1)",
+      "web(delay:soon)",
+      "web(delay:2h)",
+      "web(retries:many)",
+      "web(retries:-1)",
+      "web(delay:1s, delay:2s)",
+      "web(retries:1, retries:2)",
+      "web(nope:1)",
     ] {
       assert!(
         parse_name(text).is_err(),
@@ -470,11 +496,11 @@ mod tests {
     for text in [
       "(optional, once)",
       "(restart)",
-      "(restart, retries=5)",
-      "(delay=2s)",
-      "(delay=500ms, muted)",
+      "(restart, retries:5)",
+      "(delay:2s)",
+      "(delay:500ms, muted)",
       "(once, allow-failure)",
-      "(optional, stop, delay=1s, retries=0, muted, allow-failure)",
+      "(optional, stop, delay:1s, retries:0, muted, allow-failure)",
     ] {
       let declaration = format!("web{}", text);
       let (name, flags) = parse_name(&declaration).unwrap();
@@ -485,7 +511,7 @@ mod tests {
 
   #[test]
   fn parse_name_reads_the_value_carrying_flags() {
-    let (_, flags) = parse_name("web(delay=1500ms, retries=3)").unwrap();
+    let (_, flags) = parse_name("web(delay:1500ms, retries:3)").unwrap();
     assert_eq!(flags.delay, Some(Duration::from_millis(1500)));
     assert_eq!(flags.retries, Some(3));
 
@@ -509,7 +535,7 @@ mod tests {
 
   #[test]
   fn retries_of_zero_is_a_real_value_not_an_absence() {
-    let (_, flags) = parse_name("web(retries=0)").unwrap();
+    let (_, flags) = parse_name("web(retries:0)").unwrap();
     assert_eq!(flags.retries, Some(0));
   }
 
@@ -519,5 +545,28 @@ mod tests {
     assert!(parse_line("web:   ").is_err());
     assert!(parse_line("no separator here").is_err());
     assert!(parse_line("(once): echo hi").is_err());
+  }
+
+  #[test]
+  fn parse_line_splits_after_the_flag_list() {
+    let def = parse_line("web(delay:2s, retries:3): bin/rails server").unwrap();
+    assert_eq!(def.name, "web");
+    assert_eq!(def.cmd, "bin/rails server");
+    assert_eq!(def.flags.delay, Some(Duration::from_secs(2)));
+    assert_eq!(def.flags.retries, Some(3));
+  }
+
+  #[test]
+  fn parse_line_keeps_separators_inside_the_command() {
+    let def = parse_line("migrate(once): rake db:migrate").unwrap();
+    assert_eq!(def.name, "migrate");
+    assert_eq!(def.cmd, "rake db:migrate");
+    assert_eq!(def.flags.on_exit, Some(OnExit::Ignore));
+  }
+
+  #[test]
+  fn parse_line_reports_an_unclosed_flag_list() {
+    let err = parse_line("web(delay:2s: echo hi").unwrap_err();
+    assert!(err.contains("unclosed"), "{}", err);
   }
 }

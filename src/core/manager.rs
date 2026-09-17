@@ -83,7 +83,7 @@ enum Event {
   ProcessEnded(usize),
   /// Delayed restart timer fired for process `id`.
   Restart(usize),
-  /// `delay=<dur>` elapsed — time to make process `id`'s first start.
+  /// `delay:<dur>` elapsed — time to make process `id`'s first start.
   DelayedStart(usize),
   /// Ctrl+C signal received.
   CtrlC,
@@ -344,7 +344,7 @@ impl ProcessManager {
     });
   }
 
-  /// Schedule the deferred first start of a `delay=<dur>` process.
+  /// Schedule the deferred first start of a `delay:<dur>` process.
   fn spawn_delayed_start(id: usize, delay: Duration, tx: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
       sleep(delay).await;
@@ -859,7 +859,7 @@ impl ProcessManager {
           self.emit_system(proc, &exit_message);
         }
 
-        // `retries=<n>` caps the loop: a process that cannot stay up should
+        // `retries:<n>` caps the loop: a process that cannot stay up should
         // stop burning the terminal down rather than respawn forever.
         if self
           .processes
@@ -879,7 +879,7 @@ impl ProcessManager {
           if let Some(proc) = self.processes.get(&id) {
             self.emit_system(
               proc,
-              &format!("Giving up — restart limit reached (retries={})", attempts),
+              &format!("Giving up — restart limit reached (retries:{})", attempts),
             );
           }
 
@@ -952,7 +952,7 @@ impl ProcessManager {
     }
   }
 
-  /// Called when a `delay=<dur>` timer fires. Anything that happened during
+  /// Called when a `delay:<dur>` timer fires. Anything that happened during
   /// the wait — a stop, a remove, an explicit start, a shutdown — outranks it.
   fn handle_delayed_start(&mut self, id: usize) {
     let Some(proc) = self.processes.get(&id) else {
@@ -1355,7 +1355,7 @@ mod tests {
     assert_eq!(snapshot.processes[0].flags, flags);
     assert_eq!(
       snapshot.processes[0].flags.suffix(),
-      "(optional, restart, delay=1500ms, retries=3, muted, allow-failure)"
+      "(optional, restart, delay:1500ms, retries:3, muted, allow-failure)"
     );
   }
 

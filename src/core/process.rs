@@ -54,7 +54,7 @@ pub struct Process {
   pub(crate) allow_failure: bool,
   /// How long to hold this process's automatic start at session start.
   pub(crate) delay: Option<Duration>,
-  /// Ceiling on consecutive automatic restarts, from `retries=<n>`.
+  /// Ceiling on consecutive automatic restarts, from `retries:<n>`.
   pub(crate) retries: Option<u32>,
 }
 
@@ -100,10 +100,10 @@ impl Process {
     }
   }
 
-  /// Whether the `retries=<n>` ceiling has been reached, so the next exit
+  /// Whether the `retries:<n>` ceiling has been reached, so the next exit
   /// should end the restart loop instead of scheduling another attempt.
   ///
-  /// `retries=0` means the very first exit gives up, which is why this
+  /// `retries:0` means the very first exit gives up, which is why this
   /// compares against attempts already made rather than remaining.
   pub fn retries_exhausted(&self) -> bool {
     self

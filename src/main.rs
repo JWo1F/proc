@@ -101,8 +101,8 @@ Process flags (comma separated, apply to that one process only):
                   rest of the run keeps going
   restart         always respawn it when it exits
   stop            stop the whole run when it exits
-  delay=<dur>     hold its automatic start (500ms, 2s, 1m; bare = seconds)
-  retries=<n>     give up after n consecutive automatic restarts
+  delay:<dur>     hold its automatic start (500ms, 2s, 1m; bare = seconds)
+  retries:<n>     give up after n consecutive automatic restarts
   muted           keep its output out of the terminal
   allow-failure   a non-zero exit from it does not fail the run
 
@@ -119,8 +119,8 @@ Examples:
 
 Procfile example:
   db: postgres -D ./tmp/db
-  web(delay=2s): bin/rails server
-  worker(restart, retries=5): bundle exec sidekiq
+  web(delay:2s): bin/rails server
+  worker(restart, retries:5): bundle exec sidekiq
   logs(muted): tail -f log/development.log
   seed(optional, once, allow-failure): bin/rails db:seed")]
 struct Args {
