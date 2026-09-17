@@ -59,7 +59,12 @@ impl Flags {
       None => {}
     }
     if let Some(delay) = self.delay {
-      labels.push(format!("{}{}{}", DELAY, FLAG_VALUE_SEPARATOR, format_duration(delay)));
+      labels.push(format!(
+        "{}{}{}",
+        DELAY,
+        FLAG_VALUE_SEPARATOR,
+        format_duration(delay)
+      ));
     }
     if let Some(retries) = self.retries {
       labels.push(format!("{}{}{}", RETRIES, FLAG_VALUE_SEPARATOR, retries));
@@ -568,5 +573,48 @@ mod tests {
   fn parse_line_reports_an_unclosed_flag_list() {
     let err = parse_line("web(delay:2s: echo hi").unwrap_err();
     assert!(err.contains("unclosed"), "{}", err);
+  }
+
+  #[test]
+  fn durations_read_every_suffix_and_default_to_seconds() {
+    assert_eq!(parse_duration("500ms"), Some(Duration::from_millis(500)));
+    assert_eq!(parse_duration("2s"), Some(Duration::from_secs(2)));
+    assert_eq!(parse_duration("3m"), Some(Duration::from_secs(180)));
+    assert_eq!(parse_duration("30"), Some(Duration::from_secs(30)));
+    assert_eq!(parse_duration("0"), Some(Duration::from_secs(0)));
+    assert_eq!(parse_duration("  2s  "), Some(Duration::from_secs(2)));
+    // The value is trimmed after the suffix comes off, so this reads as 2s.
+    assert_eq!(parse_duration("2 s"), Some(Duration::from_secs(2)));
+  }
+
+  #[test]
+  fn durations_reject_what_they_cannot_read() {
+    for text in ["soon", "2h", "-1", "1.5s", "", "s", "ms"] {
+      assert_eq!(parse_duration(text), None, "{:?} should not parse", text);
+    }
+  }
+
+  #[test]
+  fn durations_reject_an_overflowing_value() {
+    assert_eq!(parse_duration("99999999999999999999"), None);
+    // Parses as a u64 but overflows once scaled to milliseconds.
+    assert_eq!(parse_duration("18446744073709551m"), None);
+  }
+
+  #[test]
+  fn durations_round_trip_through_their_written_form() {
+    for text in ["500ms", "2s", "1500ms", "0s", "180s"] {
+      let parsed = parse_duration(text).unwrap();
+      let written = format_duration(parsed);
+      assert_eq!(
+        parse_duration(&written),
+        Some(parsed),
+        "{} -> {}",
+        text,
+        written
+      );
+    }
+    assert_eq!(format_duration(Duration::from_secs(180)), "180s");
+    assert_eq!(format_duration(Duration::from_millis(1500)), "1500ms");
   }
 }

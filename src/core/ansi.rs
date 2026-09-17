@@ -86,3 +86,97 @@ pub fn strip_ansi_except_colors(input: &[u8]) -> Vec<u8> {
 
   result
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn strip(input: &str) -> String {
+    String::from_utf8(strip_ansi_except_colors(input.as_bytes())).unwrap()
+  }
+
+  #[test]
+  fn plain_text_passes_through_untouched() {
+    assert_eq!(strip("just a log line"), "just a log line");
+    assert_eq!(strip(""), "");
+  }
+
+  #[test]
+  fn color_sequences_are_kept() {
+    assert_eq!(strip("\x1b[31mred\x1b[0m"), "\x1b[31mred\x1b[0m");
+    assert_eq!(
+      strip("\x1b[1;32mbold green\x1b[0m"),
+      "\x1b[1;32mbold green\x1b[0m"
+    );
+    assert_eq!(
+      strip("\x1b[38;5;208m256 color\x1b[0m"),
+      "\x1b[38;5;208m256 color\x1b[0m"
+    );
+  }
+
+  #[test]
+  fn cursor_and_screen_control_is_dropped() {
+    // These are what corrupt multiplexed output: one process repainting its
+    // own frame would otherwise move the cursor over another's lines.
+    assert_eq!(strip("\x1b[2Aup two rows"), "up two rows");
+    assert_eq!(strip("\x1b[2Kerased line"), "erased line");
+    assert_eq!(strip("\x1b[2Jcleared screen"), "cleared screen");
+    assert_eq!(strip("\x1b[1;1Hhome"), "home");
+    assert_eq!(strip("before\x1b[10Dafter"), "beforeafter");
+  }
+
+  #[test]
+  fn color_survives_alongside_dropped_control() {
+    assert_eq!(
+      strip("\x1b[2K\x1b[33mwarning\x1b[0m\x1b[1A"),
+      "\x1b[33mwarning\x1b[0m"
+    );
+  }
+
+  #[test]
+  fn osc8_hyperlinks_are_preserved_whole() {
+    let bel = "\x1b]8;;https://example.com\x07link\x1b]8;;\x07";
+    assert_eq!(strip(bel), bel);
+
+    let st = "\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\";
+    assert_eq!(strip(st), st);
+  }
+
+  #[test]
+  fn a_truncated_sequence_at_the_end_is_dropped() {
+    assert_eq!(strip("text\x1b[31"), "text");
+    assert_eq!(strip("text\x1b["), "text");
+  }
+
+  #[test]
+  fn parse_osc8_at_reads_both_terminators() {
+    let bel = b"\x1b]8;;https://example.com\x07";
+    let (url, end) = parse_osc8_at(bel, 0).unwrap();
+    assert_eq!(url, b"https://example.com");
+    assert_eq!(end, bel.len());
+
+    let st = b"\x1b]8;;https://example.com\x1b\\";
+    let (url, end) = parse_osc8_at(st, 0).unwrap();
+    assert_eq!(url, b"https://example.com");
+    assert_eq!(end, st.len());
+  }
+
+  #[test]
+  fn parse_osc8_at_rejects_anything_else() {
+    assert!(parse_osc8_at(b"\x1b[31m", 0).is_none());
+    assert!(parse_osc8_at(b"plain", 0).is_none());
+    // Opens like OSC 8 but never terminates.
+    assert!(parse_osc8_at(b"\x1b]8;;https://example.com", 0).is_none());
+    // Missing the second ';' that closes the params.
+    assert!(parse_osc8_at(b"\x1b]8;nope\x07", 0).is_none());
+  }
+
+  #[test]
+  fn parse_osc8_at_honors_the_offset() {
+    let input = b"lead\x1b]8;;https://example.com\x07";
+    assert!(parse_osc8_at(input, 0).is_none());
+    let (url, end) = parse_osc8_at(input, 4).unwrap();
+    assert_eq!(url, b"https://example.com");
+    assert_eq!(end, input.len());
+  }
+}

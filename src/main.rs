@@ -66,7 +66,6 @@ struct RunOptions {
   /// Disable interactive mode (on by default in a terminal)
   #[arg(short = 'I', long)]
   no_interactive: bool,
-
 }
 
 impl RunOptions {
