@@ -121,12 +121,14 @@ A per-process `once`/`restart`/`stop` flag wins over this for that process.
 
 ## Pipe mode
 
-Given piped input, `proc` reads stdin and renders it through the same consumer:
+Given piped input and nothing to run, `proc` reads stdin and renders it through the same consumer:
 
 ```bash
 my_command | proc
 ssh host "journalctl -f" | proc -T
 ```
+
+Naming processes, passing `-r` or passing `-c` counts as asking for a run, and wins over pipe mode. That is what makes `proc web` work from a script, a Makefile or CI, where stdin is never a terminal.
 
 ## Options
 

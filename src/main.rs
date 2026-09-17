@@ -285,9 +285,19 @@ fn cmd_list(config_path: &str) -> ExitCode {
   }
 }
 
+/// Whether the command line asked for specific processes to run, by naming
+/// them, defining them inline, or pointing at a config file.
+///
+/// Redirected stdin alone does not mean pipe mode: under a script, a Makefile
+/// or CI, stdin is never a terminal, and `proc web` there has to run `web`
+/// rather than echo an empty stream back.
+fn has_explicit_run_intent(start: &RunOptions) -> bool {
+  !start.names.is_empty() || !start.run.is_empty() || config_explicitly_set()
+}
+
 async fn cmd_start(start: RunOptions) -> ExitCode {
   let piped = !std::io::stdin().is_terminal();
-  if piped {
+  if piped && !has_explicit_run_intent(&start) {
     return cmd_start_pipe(start).await;
   }
 
