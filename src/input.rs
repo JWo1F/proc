@@ -20,6 +20,10 @@ pub enum Command {
   Add(String, String),
   Remove(Target),
   Mode(OnExit),
+  /// Pin one process to its own exit policy, or hand it back to the session
+  /// mode with `None`. Scoped to the named processes — the session mode and
+  /// every other process are untouched.
+  ProcessMode(Target, Option<OnExit>),
   Quit,
 }
 

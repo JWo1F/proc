@@ -2,6 +2,7 @@ use super::LogEvent;
 use super::ansi;
 use super::color::color_for_index;
 use super::process::Process;
+use super::procfile::{Flags, ProcessSpec};
 use crate::input;
 use clap::ValueEnum;
 use nix::sys::signal::Signal;
@@ -28,6 +29,19 @@ pub enum OnExit {
   Ignore,
 }
 
+impl OnExit {
+  /// How this policy reads when it is pinned to a single process rather than
+  /// the whole session — `Ignore` on one process is what a Procfile calls
+  /// `once`.
+  pub fn process_label(self) -> &'static str {
+    match self {
+      OnExit::Restart => "restart",
+      OnExit::Stop => "stop the run",
+      OnExit::Ignore => "once",
+    }
+  }
+}
+
 impl Display for OnExit {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
@@ -48,6 +62,9 @@ pub struct ProcessSnapshot {
   pub uptime: Option<Duration>,
   pub restarts: u32,
   pub last_exit: Option<String>,
+  /// The process's current flags: whether it was declared `optional`, and its
+  /// own exit policy when it has one.
+  pub flags: Flags,
 }
 
 /// A point-in-time view of the whole session, published after every event so
@@ -66,6 +83,8 @@ enum Event {
   ProcessEnded(usize),
   /// Delayed restart timer fired for process `id`.
   Restart(usize),
+  /// `delay=<dur>` elapsed — time to make process `id`'s first start.
+  DelayedStart(usize),
   /// Ctrl+C signal received.
   CtrlC,
   /// Grace period expired — time to SIGKILL remaining processes.
@@ -105,6 +124,14 @@ pub struct ProcessManager {
   snapshot_tx: Option<tokio::sync::watch::Sender<Snapshot>>,
 }
 
+/// How a process's own exit policy reads next to the session's.
+pub fn describe_mode(mode: Option<OnExit>, session: OnExit) -> String {
+  match mode {
+    Some(mode) => mode.process_label().to_string(),
+    None => format!("follow session ({})", session),
+  }
+}
+
 /// Render a duration as a compact, fixed-shape uptime string.
 pub fn format_uptime(duration: Duration) -> String {
   let seconds = duration.as_secs();
@@ -118,9 +145,10 @@ pub fn format_uptime(duration: Duration) -> String {
 }
 
 impl ProcessManager {
-  /// Build a manager from a list of (name, command) pairs. Does not start processes yet.
+  /// Build a manager from a list of process definitions. Does not start
+  /// processes yet.
   pub fn new(
-    entries: &[(&str, &str)],
+    entries: &[ProcessSpec],
     mode: OnExit,
     log_tx: broadcast::Sender<LogEvent>,
   ) -> Result<Self, String> {
@@ -128,17 +156,18 @@ impl ProcessManager {
       return Err("No processes to run".to_string());
     }
 
-    let name_width = entries
-      .iter()
-      .map(|(name, _)| name.len())
-      .max()
-      .unwrap_or(0);
+    let name_width = entries.iter().map(|spec| spec.name.len()).max().unwrap_or(0);
     let (tx, rx) = mpsc::unbounded_channel();
 
     let processes: HashMap<usize, Process> = entries
       .iter()
       .enumerate()
-      .map(|(i, (name, cmd))| (i, Process::new(name, cmd, color_for_index(i))))
+      .map(|(i, spec)| {
+        (
+          i,
+          Process::new(&spec.name, &spec.cmd, color_for_index(i), spec.flags),
+        )
+      })
       .collect();
 
     Ok(Self {
@@ -160,6 +189,31 @@ impl ProcessManager {
   /// Longest process name length (for stdout alignment).
   pub fn name_width(&self) -> usize {
     self.name_width
+  }
+
+  /// Bring `optional` processes into the run before `start()`, as asked for
+  /// on the command line. Unknown names are returned rather than reported, so
+  /// the caller can decide whether they are a mistake.
+  pub fn enable(&mut self, names: &[String]) -> Vec<String> {
+    let mut unknown = Vec::new();
+    for name in names {
+      match self.find_by_name(name) {
+        Some(id) => {
+          if let Some(proc) = self.processes.get_mut(&id) {
+            proc.enabled = true;
+          }
+        }
+        None => unknown.push(name.clone()),
+      }
+    }
+    unknown
+  }
+
+  /// Bring every `optional` process into the run.
+  pub fn enable_all(&mut self) {
+    for proc in self.processes.values_mut() {
+      proc.enabled = true;
+    }
   }
 
   /// Set the input event receiver for interactive mode.
@@ -197,6 +251,7 @@ impl ProcessManager {
           uptime: proc.uptime(),
           restarts: proc.restarts(),
           last_exit: proc.last_exit.clone(),
+          flags: proc.flags(),
         })
         .collect(),
     }
@@ -285,6 +340,14 @@ impl ProcessManager {
     });
   }
 
+  /// Schedule the deferred first start of a `delay=<dur>` process.
+  fn spawn_delayed_start(id: usize, delay: Duration, tx: mpsc::UnboundedSender<Event>) {
+    tokio::spawn(async move {
+      sleep(delay).await;
+      let _ = tx.send(Event::DelayedStart(id));
+    });
+  }
+
   /// Listen for Ctrl+C in a loop (each signal sends a new `Event::CtrlC`).
   fn spawn_ctrlc(tx: mpsc::UnboundedSender<Event>) {
     tokio::spawn(async move {
@@ -335,7 +398,17 @@ impl ProcessManager {
   /// rather than failing on the first one.
   fn resolve(&self, target: &input::Target) -> Option<Vec<usize>> {
     let names = match target {
-      input::Target::All => return Some(self.sorted_ids()),
+      // A bulk action is about the processes in the run. An optional one that
+      // nobody has enabled yet is not in it — reaching it takes naming it.
+      input::Target::All => {
+        return Some(
+          self
+            .sorted_ids()
+            .into_iter()
+            .filter(|id| !self.processes.get(id).is_some_and(Process::is_dormant))
+            .collect(),
+        );
+      }
       input::Target::Names(names) => names,
     };
 
@@ -401,6 +474,14 @@ impl ProcessManager {
         }
       }
       input::Command::Add(name, cmd) => self.add_process(&name, &cmd),
+      input::Command::ProcessMode(target, mode) => {
+        let Some(ids) = self.resolve(&target) else {
+          return;
+        };
+        for id in ids {
+          self.set_process_mode(id, mode);
+        }
+      }
       input::Command::Mode(mode) => {
         if self.shutting_down {
           self.emit_error("Shutting down — the on-exit mode can no longer change");
@@ -433,8 +514,10 @@ impl ProcessManager {
       return;
     }
 
+    // Starting an optional process by name is how it joins the run.
     if let Some(proc) = self.processes.get_mut(&id) {
       proc.stopped = false;
+      proc.enabled = true;
       proc.reset_restart_counter();
     }
 
@@ -474,6 +557,7 @@ impl ProcessManager {
     };
 
     proc.stopped = false;
+    proc.enabled = true;
     proc.reset_restart_counter();
     let running = proc.is_running();
     proc.pending_restart = running;
@@ -521,7 +605,39 @@ impl ProcessManager {
     self.processes.remove(&id);
   }
 
+  /// Pin a process to its own exit policy, or hand it back to the session
+  /// mode with `None`.
+  fn set_process_mode(&mut self, id: usize, mode: Option<OnExit>) {
+    let Some(proc) = self.processes.get_mut(&id) else {
+      return;
+    };
+    proc.on_exit = mode;
+
+    let (name, color) = (proc.name.clone(), proc.color);
+    let session = self.mode;
+    self.emit_reply(
+      &name,
+      color,
+      format!("[{}] Run mode: {}", name, describe_mode(mode, session)),
+    );
+  }
+
+  /// Add a process at runtime. The name may carry Procfile flags, so
+  /// `migrate(once)` works here exactly as it does in the file.
   fn add_process(&mut self, name: &str, cmd: &str) {
+    let (name, flags) = match crate::core::procfile::parse_name(name) {
+      Ok(parsed) => parsed,
+      Err(reason) => {
+        self.emit_error(&format!("Process {:?} {}", name, reason));
+        return;
+      }
+    };
+
+    if name.is_empty() {
+      self.emit_error("Process doesn't have a name");
+      return;
+    }
+
     if self.find_by_name(name).is_some() {
       self.emit_error(&format!("Process already exists: {}", name));
       return;
@@ -531,13 +647,22 @@ impl ProcessManager {
     self.next_id += 1;
     self
       .processes
-      .insert(id, Process::new(name, cmd, color_for_index(id)));
+      .insert(id, Process::new(name, cmd, color_for_index(id), flags));
 
     if name.len() > self.name_width {
       self.name_width = name.len();
       if let Some(ref tx) = self.name_width_tx {
         let _ = tx.send(self.name_width);
       }
+    }
+
+    // `add worker(optional)` registers the process without running it, the
+    // same as an optional line in the Procfile.
+    if flags.optional {
+      if let Some(proc) = self.processes.get(&id) {
+        self.emit_system(proc, "Optional — not started");
+      }
+      return;
     }
 
     if let Err(err) = self.start_one(id) {
@@ -550,11 +675,29 @@ impl ProcessManager {
   fn status_of(proc: &Process) -> &'static str {
     if proc.is_running() {
       "running"
+    } else if proc.is_dormant() {
+      "optional"
     } else if proc.stopped {
       "stopped"
     } else {
       "restarting"
     }
+  }
+
+  /// The exit policy that actually applies to one process: its own Procfile
+  /// flag when it has one, otherwise the session mode.
+  ///
+  /// Shutdown outranks both — once SIGINT has gone out, a `restart` flag must
+  /// not keep resurrecting the process the session is trying to wind down.
+  fn effective_on_exit(&self, id: usize) -> OnExit {
+    if self.shutting_down {
+      return OnExit::Ignore;
+    }
+    self
+      .processes
+      .get(&id)
+      .and_then(|proc| proc.on_exit)
+      .unwrap_or(self.mode)
   }
 
   /// Spawn a single process and attach a PTY reader.
@@ -581,6 +724,23 @@ impl ProcessManager {
   /// Start every process. On first failure, stop all already-started ones.
   fn start_all(&mut self) {
     for id in self.sorted_ids() {
+      if self.processes.get(&id).is_some_and(Process::is_dormant) {
+        if let Some(proc) = self.processes.get(&id) {
+          self.emit_system(proc, "Optional — not started");
+        }
+        continue;
+      }
+
+      // `delay` only holds back the automatic start: the process stays in the
+      // table meanwhile, and an explicit start still takes effect at once.
+      if let Some(delay) = self.processes.get(&id).and_then(|proc| proc.delay) {
+        if let Some(proc) = self.processes.get(&id) {
+          self.emit_system(proc, &format!("Starting in {}ms...", delay.as_millis()));
+        }
+        Self::spawn_delayed_start(id, delay, self.tx.clone());
+        continue;
+      }
+
       if let Err(err) = self.start_one(id) {
         self.failed = true;
 
@@ -640,6 +800,14 @@ impl ProcessManager {
       proc.last_exit = Some(exit_message.clone());
     }
 
+    // `allow-failure` keeps this process's exit status out of the run's own:
+    // a linter or a smoke check can fail without failing the session.
+    let counts_as_failure = !exit_success
+      && !self
+        .processes
+        .get(&id)
+        .is_some_and(|proc| proc.allow_failure);
+
     // An explicit `stop`/`kill`/`remove` outranks the on-exit policy: skip all
     // mode logic so the process stays down until the user says otherwise.
     let (stopped, pending_remove) = self
@@ -681,10 +849,46 @@ impl ProcessManager {
       return;
     }
 
-    match self.mode {
+    match self.effective_on_exit(id) {
       OnExit::Restart => {
         if let Some(proc) = self.processes.get(&id) {
           self.emit_system(proc, &exit_message);
+        }
+
+        // `retries=<n>` caps the loop: a process that cannot stay up should
+        // stop burning the terminal down rather than respawn forever.
+        if self
+          .processes
+          .get(&id)
+          .is_some_and(Process::retries_exhausted)
+        {
+          if counts_as_failure {
+            self.failed = true;
+          }
+
+          let attempts = self
+            .processes
+            .get(&id)
+            .and_then(|proc| proc.retries)
+            .unwrap_or(0);
+
+          if let Some(proc) = self.processes.get(&id) {
+            self.emit_system(
+              proc,
+              &format!("Giving up — restart limit reached (retries={})", attempts),
+            );
+          }
+
+          // Interactively the row stays so it can be inspected and started
+          // again by hand; headless there is nobody to do that.
+          if self.is_interactive() {
+            if let Some(proc) = self.processes.get_mut(&id) {
+              proc.stopped = true;
+            }
+          } else {
+            self.processes.remove(&id);
+          }
+          return;
         }
 
         // Process stays in the map (child=None) while waiting for the restart timer.
@@ -703,7 +907,7 @@ impl ProcessManager {
         }
       }
       OnExit::Stop => {
-        if !exit_success {
+        if counts_as_failure {
           self.failed = true;
         }
 
@@ -716,7 +920,7 @@ impl ProcessManager {
       }
       OnExit::Ignore => {
         // Don't count failures caused by our own shutdown signals.
-        if !exit_success && !self.shutting_down {
+        if counts_as_failure && !self.shutting_down {
           self.failed = true;
         }
 
@@ -744,6 +948,28 @@ impl ProcessManager {
     }
   }
 
+  /// Called when a `delay=<dur>` timer fires. Anything that happened during
+  /// the wait — a stop, a remove, an explicit start, a shutdown — outranks it.
+  fn handle_delayed_start(&mut self, id: usize) {
+    let Some(proc) = self.processes.get(&id) else {
+      return;
+    };
+
+    if self.shutting_down || proc.stopped || proc.is_running() || proc.is_dormant() {
+      return;
+    }
+
+    if let Err(err) = self.start_one(id) {
+      self.failed = true;
+
+      if let Some(proc) = self.processes.get(&id) {
+        self.emit_system(proc, &err);
+      }
+
+      self.processes.remove(&id);
+    }
+  }
+
   /// Called when a restart timer fires. Starts the process again (or drops it on failure).
   fn handle_restart(&mut self, id: usize) {
     if let Some(proc) = self.processes.get(&id)
@@ -753,7 +979,7 @@ impl ProcessManager {
       return;
     }
 
-    if self.mode != OnExit::Restart || self.shutting_down {
+    if self.effective_on_exit(id) != OnExit::Restart {
       self.processes.remove(&id);
       return;
     }
@@ -859,6 +1085,7 @@ impl ProcessManager {
         }
         Event::ProcessEnded(id) => self.handle_exit(id).await,
         Event::Restart(id) => self.handle_restart(id),
+        Event::DelayedStart(id) => self.handle_delayed_start(id),
         Event::CtrlC => self.handle_ctrlc(),
         Event::ForceKill => self.signal_all(Signal::SIGKILL, "Killing..."),
         Event::Command(cmd) => self.handle_command(cmd),
@@ -875,6 +1102,36 @@ impl ProcessManager {
 mod tests {
   use super::*;
 
+  fn spec(name: &str, flags: Flags) -> ProcessSpec {
+    ProcessSpec {
+      name: name.to_string(),
+      cmd: "echo hi".to_string(),
+      flags,
+    }
+  }
+
+  fn optional() -> Flags {
+    Flags {
+      optional: true,
+      ..Flags::default()
+    }
+  }
+
+  fn manager(specs: &[ProcessSpec], mode: OnExit) -> ProcessManager {
+    let (log_tx, _) = broadcast::channel(16);
+    ProcessManager::new(specs, mode, log_tx).expect("specs are non-empty")
+  }
+
+  fn status(manager: &ProcessManager, name: &str) -> &'static str {
+    let id = manager.find_by_name(name).expect("process exists");
+    ProcessManager::status_of(&manager.processes[&id])
+  }
+
+  fn is_dormant(manager: &ProcessManager, name: &str) -> bool {
+    let id = manager.find_by_name(name).expect("process exists");
+    manager.processes[&id].is_dormant()
+  }
+
   #[test]
   fn new_fails_if_no_processes() {
     let (log_tx, _) = broadcast::channel(16);
@@ -884,5 +1141,247 @@ mod tests {
       Ok(_) => panic!("expected no-processes error"),
       Err(err) => assert!(err.contains("No processes")),
     }
+  }
+
+  #[test]
+  fn a_process_flag_outranks_the_session_mode() {
+    let manager = manager(
+      &[
+        spec("web", Flags::default()),
+        spec(
+          "migrate",
+          Flags {
+            on_exit: Some(OnExit::Ignore),
+            ..Flags::default()
+          },
+        ),
+      ],
+      OnExit::Stop,
+    );
+
+    let web = manager.find_by_name("web").unwrap();
+    let migrate = manager.find_by_name("migrate").unwrap();
+
+    assert_eq!(manager.effective_on_exit(web), OnExit::Stop);
+    assert_eq!(manager.effective_on_exit(migrate), OnExit::Ignore);
+  }
+
+  #[test]
+  fn shutdown_outranks_a_restart_flag() {
+    let mut manager = manager(
+      &[spec(
+        "web",
+        Flags {
+          on_exit: Some(OnExit::Restart),
+          ..Flags::default()
+        },
+      )],
+      OnExit::Ignore,
+    );
+    let web = manager.find_by_name("web").unwrap();
+    assert_eq!(manager.effective_on_exit(web), OnExit::Restart);
+
+    manager.shutting_down = true;
+    assert_eq!(manager.effective_on_exit(web), OnExit::Ignore);
+  }
+
+  #[test]
+  fn optional_processes_stay_out_of_the_run_until_enabled() {
+    let mut manager = manager(
+      &[spec("web", Flags::default()), spec("seed", optional())],
+      OnExit::Stop,
+    );
+
+    assert_eq!(status(&manager, "seed"), "optional");
+    assert!(is_dormant(&manager, "seed"));
+    assert!(!is_dormant(&manager, "web"));
+
+    assert!(manager.enable(&["seed".to_string()]).is_empty());
+    assert!(!is_dormant(&manager, "seed"));
+  }
+
+  #[test]
+  fn enable_reports_names_it_does_not_know() {
+    let mut manager = manager(&[spec("web", Flags::default())], OnExit::Stop);
+    assert_eq!(manager.enable(&["nope".to_string()]), vec!["nope"]);
+  }
+
+  #[test]
+  fn enable_all_brings_every_optional_process_in() {
+    let mut manager = manager(
+      &[spec("seed", optional()), spec("backfill", optional())],
+      OnExit::Stop,
+    );
+
+    manager.enable_all();
+
+    assert!(!is_dormant(&manager, "seed"));
+    assert!(!is_dormant(&manager, "backfill"));
+  }
+
+  #[test]
+  fn bulk_targets_skip_optional_processes_but_names_reach_them() {
+    let mut manager = manager(
+      &[spec("web", Flags::default()), spec("seed", optional())],
+      OnExit::Stop,
+    );
+    let web = manager.find_by_name("web").unwrap();
+    let seed = manager.find_by_name("seed").unwrap();
+
+    assert_eq!(manager.resolve(&input::Target::All), Some(vec![web]));
+    assert_eq!(
+      manager.resolve(&input::Target::Names(vec!["seed".to_string()])),
+      Some(vec![seed])
+    );
+
+    // Once enabled it joins the run, and bulk actions pick it up.
+    manager.enable(&["seed".to_string()]);
+    let mut all = manager.resolve(&input::Target::All).unwrap();
+    all.sort_unstable();
+    assert_eq!(all, vec![web, seed].into_iter().collect::<Vec<_>>());
+  }
+
+  #[test]
+  fn setting_a_process_mode_leaves_the_session_and_its_peers_alone() {
+    let mut manager = manager(
+      &[
+        spec("web", Flags::default()),
+        spec("worker", Flags::default()),
+      ],
+      OnExit::Stop,
+    );
+    let web = manager.find_by_name("web").unwrap();
+    let worker = manager.find_by_name("worker").unwrap();
+
+    manager.set_process_mode(web, Some(OnExit::Restart));
+
+    assert_eq!(manager.mode, OnExit::Stop);
+    assert_eq!(manager.effective_on_exit(web), OnExit::Restart);
+    assert_eq!(manager.effective_on_exit(worker), OnExit::Stop);
+
+    // Handing it back means following the session again.
+    manager.set_process_mode(web, None);
+    assert_eq!(manager.effective_on_exit(web), OnExit::Stop);
+  }
+
+  #[test]
+  fn added_processes_can_carry_flags_in_their_name() {
+    let mut manager = manager(&[spec("web", Flags::default())], OnExit::Stop);
+
+    manager.add_process("seed(optional, once)", "echo seed");
+
+    let seed = manager.find_by_name("seed").expect("seed was added");
+    assert_eq!(
+      manager.processes[&seed].flags(),
+      Flags {
+        optional: true,
+        on_exit: Some(OnExit::Ignore),
+        ..Flags::default()
+      }
+    );
+    // Optional, so adding it registered the process without spawning it.
+    assert_eq!(status(&manager, "seed"), "optional");
+  }
+
+  #[test]
+  fn a_retry_ceiling_is_measured_against_attempts_already_made() {
+    let flags = Flags {
+      on_exit: Some(OnExit::Restart),
+      retries: Some(2),
+      ..Flags::default()
+    };
+    let mut manager = manager(&[spec("web", flags)], OnExit::Ignore);
+    let web = manager.find_by_name("web").unwrap();
+    let proc = manager.processes.get_mut(&web).unwrap();
+
+    assert!(!proc.retries_exhausted());
+    proc.next_restart_delay();
+    assert!(!proc.retries_exhausted());
+    proc.next_restart_delay();
+    assert!(proc.retries_exhausted());
+
+    // An explicit start or restart clears the counter, so the ceiling is on
+    // consecutive automatic attempts rather than the life of the session.
+    proc.reset_restart_counter();
+    assert!(!proc.retries_exhausted());
+  }
+
+  #[test]
+  fn retries_of_zero_gives_up_on_the_very_first_exit() {
+    let flags = Flags {
+      on_exit: Some(OnExit::Restart),
+      retries: Some(0),
+      ..Flags::default()
+    };
+    let manager = manager(&[spec("web", flags)], OnExit::Ignore);
+    let web = manager.find_by_name("web").unwrap();
+
+    assert!(manager.processes[&web].retries_exhausted());
+  }
+
+  #[test]
+  fn no_retry_flag_means_no_ceiling() {
+    let flags = Flags {
+      on_exit: Some(OnExit::Restart),
+      ..Flags::default()
+    };
+    let mut manager = manager(&[spec("web", flags)], OnExit::Ignore);
+    let web = manager.find_by_name("web").unwrap();
+    let proc = manager.processes.get_mut(&web).unwrap();
+
+    for _ in 0..100 {
+      proc.next_restart_delay();
+      assert!(!proc.retries_exhausted());
+    }
+  }
+
+  #[test]
+  fn flags_survive_the_trip_through_a_snapshot() {
+    let flags = Flags {
+      optional: true,
+      on_exit: Some(OnExit::Restart),
+      muted: true,
+      allow_failure: true,
+      delay: Some(Duration::from_millis(1500)),
+      retries: Some(3),
+    };
+    let manager = manager(&[spec("web", flags)], OnExit::Stop);
+
+    let snapshot = manager.snapshot();
+    assert_eq!(snapshot.processes[0].flags, flags);
+    assert_eq!(
+      snapshot.processes[0].flags.suffix(),
+      "(optional, restart, delay=1500ms, retries=3, muted, allow-failure)"
+    );
+  }
+
+  #[test]
+  fn a_delayed_start_is_dropped_once_the_session_is_winding_down() {
+    let flags = Flags {
+      delay: Some(Duration::from_secs(5)),
+      ..Flags::default()
+    };
+    let mut manager = manager(&[spec("web", flags)], OnExit::Ignore);
+    let web = manager.find_by_name("web").unwrap();
+
+    // A timer that fires after shutdown began must not spawn anything.
+    manager.shutting_down = true;
+    manager.handle_delayed_start(web);
+    assert!(!manager.processes[&web].is_running());
+
+    // Nor must one whose process was stopped by hand during the wait.
+    manager.shutting_down = false;
+    manager.processes.get_mut(&web).unwrap().stopped = true;
+    manager.handle_delayed_start(web);
+    assert!(!manager.processes[&web].is_running());
+  }
+
+  #[test]
+  fn adding_a_process_with_a_bad_flag_does_not_register_it() {
+    let mut manager = manager(&[spec("web", Flags::default())], OnExit::Stop);
+
+    manager.add_process("seed(nope)", "echo seed");
+
+    assert!(manager.find_by_name("seed").is_none());
   }
 }

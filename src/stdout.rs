@@ -15,6 +15,9 @@ pub struct StdoutConfig {
   pub compact: bool,
   pub no_system: bool,
   pub name_width: usize,
+  /// Processes declared `muted`, hidden from the terminal from the first line.
+  /// They still reach the web/SSE consumer, which reads the same broadcast.
+  pub muted: Vec<String>,
   /// When Some, name_width updates dynamically (for the `add` command).
   pub name_width_rx: Option<watch::Receiver<usize>>,
   /// When Some, focus/mute/clear commands are accepted.
@@ -36,6 +39,15 @@ struct OutputFilter {
 }
 
 impl OutputFilter {
+  /// Start out with the processes declared `muted` already hidden, so their
+  /// very first line never reaches the terminal.
+  fn new(muted: &[String]) -> Self {
+    Self {
+      focus: None,
+      muted: muted.iter().cloned().collect(),
+    }
+  }
+
   fn shows(&self, process: &str) -> bool {
     if let Some(ref focused) = self.focus {
       return focused == process;
@@ -46,7 +58,7 @@ impl OutputFilter {
 
 pub async fn run(mut rx: broadcast::Receiver<LogEvent>, mut config: StdoutConfig) {
   let mut display_rx = config.display_rx.take();
-  let mut filter = OutputFilter::default();
+  let mut filter = OutputFilter::new(&config.muted);
 
   loop {
     let received = match display_rx {
@@ -226,6 +238,19 @@ mod tests {
 
     assert!(!filter.shows("css"));
     assert!(filter.shows("web"));
+  }
+
+  #[test]
+  fn a_muted_declaration_hides_the_process_from_the_first_line() {
+    let filter = OutputFilter::new(&["logs".to_string()]);
+
+    assert!(!filter.shows("logs"));
+    assert!(filter.shows("web"));
+
+    // And it is an ordinary mute, so unmuting from the menu lifts it.
+    let mut filter = filter;
+    filter.muted.remove("logs");
+    assert!(filter.shows("logs"));
   }
 
   #[test]

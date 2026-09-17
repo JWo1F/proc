@@ -1,7 +1,8 @@
 use super::app::{
-  ALL_ACTION_ITEMS, AddField, App, Item, MAIN_ITEMS, MODE_ITEMS, PROCESS_ACTION_ITEMS, Screen,
+  ALL_ACTION_ITEMS, AddField, App, Item, MAIN_ITEMS, MODE_ITEMS, PROCESS_ACTION_ITEMS,
+  PROCESS_MODE_ITEMS, PROCESS_MODES, Screen,
 };
-use crate::core::manager::{OnExit, ProcessSnapshot, format_uptime};
+use crate::core::manager::{OnExit, ProcessSnapshot, describe_mode, format_uptime};
 use crate::core::resources::{ResourceHistory, ResourceMap};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
@@ -68,11 +69,12 @@ fn content_height(app: &App) -> u16 {
     Screen::Main { .. } => MAIN_ITEMS.len(),
     Screen::Processes { .. } => app.snapshot.processes.len().max(1),
     Screen::ProcessActions { .. } => PROCESS_ACTION_ITEMS.len(),
+    Screen::ProcessMode { .. } => PROCESS_MODE_ITEMS.len(),
     Screen::AllActions { .. } => ALL_ACTION_ITEMS.len(),
     Screen::ModeMenu { .. } => MODE_ITEMS.len(),
     Screen::AddProcess { .. } => 6,
-    // 7 text fields at most + a blank line + two 4-row graph panels.
-    Screen::Info { .. } => 7 + 1 + 4 + 4,
+    // 9 text fields at most + a blank line + two 4-row graph panels.
+    Screen::Info { .. } => 9 + 1 + 4 + 4,
     Screen::Ps => app.snapshot.processes.len().max(1) + 1,
     // Summary + two 4-row graph panels + blank spacer + table header + one row per process.
     Screen::Dashboard => 1 + 4 + 4 + 1 + 1 + app.snapshot.processes.len().max(1),
@@ -107,6 +109,7 @@ fn label(screen: &Screen) -> String {
     Screen::Main { .. } => "Menu".to_string(),
     Screen::Processes { .. } => "Processes".to_string(),
     Screen::ProcessActions { name, .. } => name.clone(),
+    Screen::ProcessMode { name, .. } => format!("{} — run mode", name),
     Screen::AllActions { .. } => "All processes".to_string(),
     Screen::ModeMenu { .. } => "Mode".to_string(),
     Screen::AddProcess { .. } => "Add process".to_string(),
@@ -152,6 +155,10 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
       render_list(frame, area, PROCESS_ACTION_ITEMS, *selected)
     }
 
+    Screen::ProcessMode { name, selected } => {
+      render_process_mode(frame, area, name, *selected, app)
+    }
+
     Screen::AllActions { selected } => render_list(frame, area, ALL_ACTION_ITEMS, *selected),
 
     Screen::ModeMenu { selected } => {
@@ -193,6 +200,29 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
       frame.render_widget(p, area);
     }
   }
+}
+
+/// The per-process mode list, with the process's current choice marked.
+fn render_process_mode(frame: &mut Frame, area: Rect, name: &str, selected: usize, app: &App) {
+  let current = app
+    .snapshot
+    .processes
+    .iter()
+    .find(|p| p.name == name)
+    .map(|p| p.flags.on_exit);
+
+  let items: Vec<ListItem> = PROCESS_MODE_ITEMS
+    .iter()
+    .enumerate()
+    .map(|(i, item)| {
+      let mut text = item_label(*item);
+      if current.is_some() && PROCESS_MODES.get(i).copied() == current {
+        text.push_str("  (current)");
+      }
+      ListItem::new(text)
+    })
+    .collect();
+  render_items(frame, area, items, selected);
 }
 
 fn status_style(status: &str) -> Style {
@@ -285,6 +315,14 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
     lines.push(field("Uptime", format_uptime(uptime)));
   }
   lines.push(field("Restarts", proc.restarts.to_string()));
+  lines.push(field(
+    "Run mode",
+    describe_mode(proc.flags.on_exit, app.snapshot.mode),
+  ));
+  let flags = proc.flags.labels();
+  if !flags.is_empty() {
+    lines.push(field("Flags", flags.join(", ")));
+  }
   if let Some(ref last_exit) = proc.last_exit {
     lines.push(field("Last exit", last_exit.clone()));
   }

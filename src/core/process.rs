@@ -1,3 +1,5 @@
+use super::manager::OnExit;
+use super::procfile::Flags;
 use colored::Color;
 use nix::sys::signal::Signal;
 use pty_process::{Command, Pty};
@@ -37,10 +39,27 @@ pub struct Process {
   spawns: u32,
   /// How the previous run ended, for `info`.
   pub(crate) last_exit: Option<String>,
+  /// Per-process `--on-exit` override from a Procfile flag. `None` follows
+  /// whatever the session is currently set to.
+  pub(crate) on_exit: Option<OnExit>,
+  /// Declared `optional` in the Procfile.
+  pub(crate) optional: bool,
+  /// Whether an `optional` process has been brought into the run yet.
+  /// Always true for a process without the flag.
+  pub(crate) enabled: bool,
+  /// Declared `muted`: kept out of the terminal, still sent to the web feed.
+  pub(crate) muted: bool,
+  /// Declared `allow-failure`: a non-zero exit from this process does not
+  /// make the run as a whole fail.
+  pub(crate) allow_failure: bool,
+  /// How long to hold this process's automatic start at session start.
+  pub(crate) delay: Option<Duration>,
+  /// Ceiling on consecutive automatic restarts, from `retries=<n>`.
+  pub(crate) retries: Option<u32>,
 }
 
 impl Process {
-  pub fn new(name: &str, cmd: &str, color: Color) -> Self {
+  pub fn new(name: &str, cmd: &str, color: Color, flags: Flags) -> Self {
     Self {
       name: name.to_string(),
       cmd: cmd.to_string(),
@@ -53,7 +72,43 @@ impl Process {
       started_at: None,
       spawns: 0,
       last_exit: None,
+      on_exit: flags.on_exit,
+      optional: flags.optional,
+      enabled: !flags.optional,
+      muted: flags.muted,
+      allow_failure: flags.allow_failure,
+      delay: flags.delay,
+      retries: flags.retries,
     }
+  }
+
+  /// An optional process nobody has asked for yet: it sits in the table as an
+  /// offer, and bulk actions pass it by until something enables it.
+  pub fn is_dormant(&self) -> bool {
+    self.optional && !self.enabled
+  }
+
+  /// The flags this process would be written with in a Procfile.
+  pub fn flags(&self) -> Flags {
+    Flags {
+      optional: self.optional,
+      on_exit: self.on_exit,
+      muted: self.muted,
+      allow_failure: self.allow_failure,
+      delay: self.delay,
+      retries: self.retries,
+    }
+  }
+
+  /// Whether the `retries=<n>` ceiling has been reached, so the next exit
+  /// should end the restart loop instead of scheduling another attempt.
+  ///
+  /// `retries=0` means the very first exit gives up, which is why this
+  /// compares against attempts already made rather than remaining.
+  pub fn retries_exhausted(&self) -> bool {
+    self
+      .retries
+      .is_some_and(|retries| self.restart_attempts >= retries)
   }
 
   /// Spawn the command inside a new PTY via `$SHELL -c <cmd>`.
@@ -141,7 +196,7 @@ mod tests {
 
   #[test]
   fn restart_delay_grows_linearly_and_caps() {
-    let mut process = Process::new("web", "echo hi", Color::Blue);
+    let mut process = Process::new("web", "echo hi", Color::Blue, Flags::default());
 
     let first = process.next_restart_delay();
     assert_eq!(first, Duration::from_millis(RESTART_DELAY_MS));
@@ -163,7 +218,7 @@ mod tests {
 
   #[test]
   fn reset_restart_counter_resets_to_zero() {
-    let mut process = Process::new("web", "echo hi", Color::Blue);
+    let mut process = Process::new("web", "echo hi", Color::Blue, Flags::default());
 
     // Build up some restart attempts
     process.next_restart_delay();

@@ -24,11 +24,30 @@ pub const PROCESS_ACTION_ITEMS: &[Item] = &[
   ('r', "Restart"),
   ('k', "Kill"),
   ('i', "Info"),
+  ('o', "Run mode"),
   ('f', "Focus"),
   ('m', "Mute"),
   ('u', "Unmute"),
   ('x', "Remove"),
   ('b', "Back"),
+];
+
+/// Per-process counterpart to `MODE_ITEMS`: the same policies, worded for one
+/// process, plus a way to hand it back to the session mode.
+pub const PROCESS_MODE_ITEMS: &[Item] = &[
+  ('r', "Restart — respawn it on exit"),
+  ('s', "Stop — end the run on exit"),
+  ('o', "Once — leave it down on exit"),
+  ('f', "Follow the session mode"),
+  ('b', "Back"),
+];
+
+/// The run mode each `PROCESS_MODE_ITEMS` row selects.
+pub const PROCESS_MODES: &[Option<OnExit>] = &[
+  Some(OnExit::Restart),
+  Some(OnExit::Stop),
+  Some(OnExit::Ignore),
+  None,
 ];
 
 pub const ALL_ACTION_ITEMS: &[Item] = &[
@@ -80,6 +99,10 @@ pub enum Screen {
     name: String,
     selected: usize,
   },
+  ProcessMode {
+    name: String,
+    selected: usize,
+  },
   AllActions {
     selected: usize,
   },
@@ -106,6 +129,7 @@ enum Peek {
   Main { selected: usize },
   Processes { selected: usize },
   ProcessActions { name: String, selected: usize },
+  ProcessMode { name: String, selected: usize },
   AllActions { selected: usize },
   ModeMenu { selected: usize },
   AddProcess {
@@ -153,6 +177,10 @@ impl App {
         name: name.clone(),
         selected: *selected,
       },
+      Screen::ProcessMode { name, selected } => Peek::ProcessMode {
+        name: name.clone(),
+        selected: *selected,
+      },
       Screen::AllActions { selected } => Peek::AllActions { selected: *selected },
       Screen::ModeMenu { selected } => Peek::ModeMenu { selected: *selected },
       Screen::AddProcess {
@@ -190,6 +218,7 @@ impl App {
       Some(Screen::Main { selected }) => Some(*selected),
       Some(Screen::Processes { selected }) => Some(*selected),
       Some(Screen::ProcessActions { selected, .. }) => Some(*selected),
+      Some(Screen::ProcessMode { selected, .. }) => Some(*selected),
       Some(Screen::AllActions { selected }) => Some(*selected),
       Some(Screen::ModeMenu { selected }) => Some(*selected),
       _ => None,
@@ -205,6 +234,7 @@ impl App {
       Some(Screen::Main { selected }) => *selected = new_selected,
       Some(Screen::Processes { selected }) => *selected = new_selected,
       Some(Screen::ProcessActions { selected, .. }) => *selected = new_selected,
+      Some(Screen::ProcessMode { selected, .. }) => *selected = new_selected,
       Some(Screen::AllActions { selected }) => *selected = new_selected,
       Some(Screen::ModeMenu { selected }) => *selected = new_selected,
       _ => {}
@@ -291,21 +321,48 @@ impl App {
         return;
       }
       5 => {
-        let _ = display_tx.send(DisplayCommand::Focus(Some(name)));
+        self.push(Screen::ProcessMode { name, selected: 0 });
+        return;
       }
       6 => {
-        let _ = display_tx.send(DisplayCommand::Mute(vec![name]));
+        let _ = display_tx.send(DisplayCommand::Focus(Some(name)));
       }
       7 => {
+        let _ = display_tx.send(DisplayCommand::Mute(vec![name]));
+      }
+      8 => {
         let _ = display_tx.send(DisplayCommand::Unmute(vec![name]));
       }
-      8 => send_command(input_tx, Command::Remove(target())),
-      9 => {
+      9 => send_command(input_tx, Command::Remove(target())),
+      10 => {
         self.pop();
         return;
       }
       _ => return,
     }
+    self.should_close = true;
+  }
+
+  /// Pin this one process to its own exit policy. The session mode and every
+  /// other process are left alone.
+  fn activate_process_mode(
+    &mut self,
+    name: String,
+    index: usize,
+    input_tx: &UnboundedSender<InputEvent>,
+  ) {
+    let Some(mode) = PROCESS_MODES.get(index) else {
+      // The only row past the modes is Back.
+      if index == PROCESS_MODE_ITEMS.len() - 1 {
+        self.pop();
+      }
+      return;
+    };
+
+    send_command(
+      input_tx,
+      Command::ProcessMode(Target::Names(vec![name]), *mode),
+    );
     self.should_close = true;
   }
 
@@ -417,6 +474,21 @@ impl App {
         }
       }
 
+      Peek::ProcessMode { name, selected } => {
+        if self.nav_current(PROCESS_MODE_ITEMS.len(), key.code) {
+          return;
+        }
+        if let Some(index) = hotkey_index(PROCESS_MODE_ITEMS, key) {
+          self.activate_process_mode(name, index, input_tx);
+          return;
+        }
+        match key.code {
+          KeyCode::Esc => self.pop(),
+          KeyCode::Enter => self.activate_process_mode(name, selected, input_tx),
+          _ => {}
+        }
+      }
+
       Peek::AllActions { selected } => {
         if self.nav_current(ALL_ACTION_ITEMS.len(), key.code) {
           return;
@@ -457,10 +529,18 @@ impl App {
           if field == AddField::Name {
             self.set_add_field(AddField::Command);
           } else if !name.trim().is_empty() && !command.trim().is_empty() {
-            send_command(
-              input_tx,
-              Command::Add(name.trim().to_string(), command.trim().to_string()),
-            );
+            let name = name.trim().to_string();
+
+            // Muting is the stdout consumer's business, not the manager's, so
+            // a `muted` flag typed into the name has to be routed separately.
+            // An unparseable name is left for the manager to report.
+            if let Ok((name, flags)) = crate::core::procfile::parse_name(&name)
+              && flags.muted
+            {
+              let _ = display_tx.send(DisplayCommand::Mute(vec![name.to_string()]));
+            }
+
+            send_command(input_tx, Command::Add(name, command.trim().to_string()));
             self.should_close = true;
           }
         }
@@ -499,4 +579,194 @@ impl App {
 
 fn send_command(input_tx: &UnboundedSender<InputEvent>, cmd: Command) {
   let _ = input_tx.send(InputEvent::Command(cmd));
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::core::manager::ProcessSnapshot;
+  use crate::core::procfile::Flags;
+  use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
+
+  /// An `App` wired to real channels, so a test can press keys and read back
+  /// whatever the modal sent to the manager.
+  struct Harness {
+    app: App,
+    input_tx: UnboundedSender<InputEvent>,
+    input_rx: UnboundedReceiver<InputEvent>,
+    display_tx: UnboundedSender<DisplayCommand>,
+    display_rx: UnboundedReceiver<DisplayCommand>,
+  }
+
+  impl Harness {
+    fn new(processes: &[(&str, Flags)]) -> Self {
+      let snapshot = Snapshot {
+        mode: OnExit::Stop,
+        processes: processes
+          .iter()
+          .map(|(name, flags)| ProcessSnapshot {
+            name: name.to_string(),
+            command: "echo hi".to_string(),
+            status: "running",
+            pid: None,
+            uptime: None,
+            restarts: 0,
+            last_exit: None,
+            flags: *flags,
+          })
+          .collect(),
+      };
+      let (input_tx, input_rx) = unbounded_channel();
+      let (display_tx, display_rx) = unbounded_channel();
+      Self {
+        app: App::new(snapshot, ResourceMap::new()),
+        input_tx,
+        input_rx,
+        display_tx,
+        display_rx,
+      }
+    }
+
+    fn press(&mut self, code: KeyCode) {
+      let key = KeyEvent::new(code, KeyModifiers::NONE);
+      self.app.handle_key(key, &self.input_tx, &self.display_tx);
+    }
+
+    fn type_keys(&mut self, keys: &str) {
+      for c in keys.chars() {
+        self.press(KeyCode::Char(c));
+      }
+    }
+
+    fn command(&mut self) -> Option<Command> {
+      match self.input_rx.try_recv() {
+        Ok(InputEvent::Command(cmd)) => Some(cmd),
+        _ => None,
+      }
+    }
+
+    fn display(&mut self) -> Option<DisplayCommand> {
+      self.display_rx.try_recv().ok()
+    }
+  }
+
+  fn one_process() -> Vec<(&'static str, Flags)> {
+    vec![("web", Flags::default())]
+  }
+
+  fn target() -> Target {
+    Target::Names(vec!["web".to_string()])
+  }
+
+  /// The action list and its dispatch table are matched by index, so every
+  /// row has to be checked — inserting one in the middle must not silently
+  /// shift `Remove` onto someone else's key.
+  #[test]
+  fn every_process_action_hotkey_dispatches_its_own_row() {
+    let expected: &[(char, Option<Command>)] = &[
+      ('s', Some(Command::Start(target()))),
+      ('t', Some(Command::Stop(target()))),
+      ('r', Some(Command::Restart(target()))),
+      ('k', Some(Command::Kill(target()))),
+      ('x', Some(Command::Remove(target()))),
+    ];
+
+    for (hotkey, command) in expected {
+      let mut h = Harness::new(&one_process());
+      h.type_keys("p1");
+      h.press(KeyCode::Char(*hotkey));
+      assert_eq!(h.command(), *command, "hotkey {:?}", hotkey);
+      assert!(
+        h.app.should_close,
+        "hotkey {:?} should close the modal",
+        hotkey
+      );
+    }
+  }
+
+  #[test]
+  fn display_only_actions_never_reach_the_manager() {
+    let expected: &[(char, DisplayCommand)] = &[
+      ('f', DisplayCommand::Focus(Some("web".to_string()))),
+      ('m', DisplayCommand::Mute(vec!["web".to_string()])),
+      ('u', DisplayCommand::Unmute(vec!["web".to_string()])),
+    ];
+
+    for (hotkey, display) in expected {
+      let mut h = Harness::new(&one_process());
+      h.type_keys("p1");
+      h.press(KeyCode::Char(*hotkey));
+      assert_eq!(h.display(), Some(display.clone()), "hotkey {:?}", hotkey);
+      assert_eq!(h.command(), None, "hotkey {:?}", hotkey);
+    }
+  }
+
+  #[test]
+  fn info_and_back_stay_inside_the_modal() {
+    let mut h = Harness::new(&one_process());
+    h.type_keys("p1i");
+    assert!(matches!(h.app.stack.last(), Some(Screen::Info { .. })));
+    assert!(!h.app.should_close);
+
+    h.press(KeyCode::Esc);
+    h.press(KeyCode::Char('b'));
+    assert!(matches!(h.app.stack.last(), Some(Screen::Processes { .. })));
+  }
+
+  #[test]
+  fn the_run_mode_screen_pins_one_process_to_its_own_policy() {
+    let expected: &[(char, Option<OnExit>)] = &[
+      ('r', Some(OnExit::Restart)),
+      ('s', Some(OnExit::Stop)),
+      ('o', Some(OnExit::Ignore)),
+      ('f', None),
+    ];
+
+    for (hotkey, mode) in expected {
+      let mut h = Harness::new(&one_process());
+      h.type_keys("p1o");
+      assert!(matches!(
+        h.app.stack.last(),
+        Some(Screen::ProcessMode { .. })
+      ));
+
+      h.press(KeyCode::Char(*hotkey));
+      assert_eq!(
+        h.command(),
+        Some(Command::ProcessMode(target(), *mode)),
+        "hotkey {:?}",
+        hotkey
+      );
+    }
+  }
+
+  #[test]
+  fn back_out_of_the_run_mode_screen_sends_nothing() {
+    let mut h = Harness::new(&one_process());
+    h.type_keys("p1ob");
+
+    assert_eq!(h.command(), None);
+    assert!(!h.app.should_close);
+    assert!(matches!(
+      h.app.stack.last(),
+      Some(Screen::ProcessActions { .. })
+    ));
+  }
+
+  #[test]
+  fn starting_an_optional_process_targets_it_by_name() {
+    let optional = Flags {
+      optional: true,
+      ..Flags::default()
+    };
+    let mut h = Harness::new(&[("web", Flags::default()), ("seed", optional)]);
+
+    // Row 2 is the optional process; Start is how the menu brings it in.
+    h.type_keys("p2s");
+
+    assert_eq!(
+      h.command(),
+      Some(Command::Start(Target::Names(vec!["seed".to_string()])))
+    );
+  }
 }

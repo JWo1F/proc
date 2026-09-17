@@ -7,6 +7,7 @@
 //! displays it through the same stdout/web consumers.
 
 use crate::core::manager::{OnExit, ProcessManager};
+use crate::core::procfile::ProcessSpec;
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::io::IsTerminal;
@@ -39,6 +40,14 @@ struct RunOptions {
   /// Behavior when a process exits [default: stop; ignore in interactive mode]
   #[arg(value_enum, long)]
   on_exit: Option<OnExit>,
+
+  /// Bring an `optional` process into the run (repeatable)
+  #[arg(short = 'e', long = "enable")]
+  enable: Vec<String>,
+
+  /// Bring every `optional` process into the run
+  #[arg(short = 'E', long = "enable-all")]
+  enable_all: bool,
 
   /// Prefix each line with a timestamp
   #[arg(short = 'T', long)]
@@ -85,15 +94,40 @@ impl RunOptions {
 #[command(after_help = "\
 Procfile format:
   <name>: <command>
+  <name>(<flags>): <command>
 
   Lines starting with '#' are comments.
+
+Process flags (comma separated, apply to that one process only):
+  optional        keep it out of the run until it is asked for by name,
+                  with -e/--enable, or from the interactive menu
+  once            when it exits, leave it down — no restart, and the
+                  rest of the run keeps going
+  restart         always respawn it when it exits
+  stop            stop the whole run when it exits
+  delay=<dur>     hold its automatic start (500ms, 2s, 1m; bare = seconds)
+  retries=<n>     give up after n consecutive automatic restarts
+  muted           keep its output out of the terminal (the web feed
+                  still receives it)
+  allow-failure   a non-zero exit from it does not fail the run
+
+  Only one of once/restart/stop per process — they are the same setting.
 
 Examples:
   procfile
   procfile web worker
+  procfile -e seed
   procfile -r 'extra: sidekiq'
+  procfile -r 'migrate(once): rake db:migrate'
   procfile check
-  procfile list")]
+  procfile list
+
+Procfile example:
+  db: postgres -D ./tmp/db
+  web(delay=2s): bin/rails server
+  worker(restart, retries=5): bundle exec sidekiq
+  logs(muted): tail -f log/development.log
+  seed(optional, once, allow-failure): bin/rails db:seed")]
 struct Args {
   #[command(subcommand)]
   command: Option<Command>,
@@ -122,27 +156,34 @@ enum Command {
   },
 }
 
-/// Parse --run "name: command" into (name, command), reusing Procfile syntax.
-fn parse_inline(run: &[String]) -> Result<Vec<(&str, &str)>, String> {
+/// Parse --run "name: command" into process definitions, reusing Procfile
+/// syntax so inline entries accept the same flags a file line does.
+fn parse_inline(run: &[String]) -> Result<Vec<ProcessSpec>, String> {
   let mut result = Vec::new();
   for entry in run {
-    let Some((name, cmd)) = entry.split_once(':') else {
-      return Err(format!(
-        "Invalid --run format: {:?}\nExpected: \"name: command\"",
-        entry
-      ));
-    };
-    let name = name.trim();
-    let cmd = cmd.trim();
-    if name.is_empty() || cmd.is_empty() {
-      return Err(format!(
-        "Invalid --run format: {:?}\nExpected: \"name: command\"",
-        entry
-      ));
+    match core::procfile::parse_line(entry) {
+      Ok(def) => result.push(def.to_spec()),
+      Err(reason) => {
+        return Err(format!(
+          "Invalid --run entry {:?}: it {}\nExpected: \"name: command\" or \"name(flags): command\"",
+          entry, reason
+        ));
+      }
     }
-    result.push((name, cmd));
   }
   Ok(result)
+}
+
+/// Optional processes the command line opted into: anything named positionally
+/// (which already narrowed the Procfile) plus every -e/--enable argument.
+fn opted_in_names(start: &RunOptions) -> Vec<String> {
+  let mut names = start.names.clone();
+  for name in &start.enable {
+    if !names.contains(name) {
+      names.push(name.clone());
+    }
+  }
+  names
 }
 
 /// Check whether -c/--config was explicitly passed on the CLI.
@@ -150,20 +191,15 @@ fn config_explicitly_set() -> bool {
   std::env::args().any(|a| a == "-c" || a == "--config")
 }
 
-/// Read a Procfile and parse it, returning owned (name, command) pairs.
-fn read_and_parse(config_path: &str) -> Result<Vec<(String, String)>, ExitCode> {
+/// Read a Procfile and parse it into owned process definitions.
+fn read_and_parse(config_path: &str) -> Result<Vec<ProcessSpec>, ExitCode> {
   let config = fs::read_to_string(config_path).map_err(|err| {
     eprintln!("{}: {}", config_path, format_io_error(&err));
     ExitCode::from(2)
   })?;
 
   core::procfile::parse(&config, &[])
-    .map(|procs| {
-      procs
-        .into_iter()
-        .map(|(n, c)| (n.to_string(), c.to_string()))
-        .collect()
-    })
+    .map(|procs| procs.iter().map(|def| def.to_spec()).collect())
     .map_err(|err| {
       eprintln!("{}\n{}", config_path, err);
       ExitCode::from(2)
@@ -189,27 +225,13 @@ fn spawn_stdout(
   name_width: usize,
   log_tx: &broadcast::Sender<crate::core::LogEvent>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-  if opts.silent {
-    return None;
-  }
-  let rx = log_tx.subscribe();
-  Some(tokio::spawn(stdout::run(
-    rx,
-    stdout::StdoutConfig {
-      timestamps: opts.timestamps,
-      compact: opts.compact,
-      no_system: opts.no_system,
-      name_width,
-      name_width_rx: None,
-      display_rx: None,
-      modal_active: None,
-    },
-  )))
+  spawn_stdout_interactive(opts, name_width, &[], log_tx, None, None, None)
 }
 
 fn spawn_stdout_interactive(
   opts: &RunOptions,
   name_width: usize,
+  muted: &[ProcessSpec],
   log_tx: &broadcast::Sender<crate::core::LogEvent>,
   name_width_rx: Option<watch::Receiver<usize>>,
   display_rx: Option<mpsc::UnboundedReceiver<input::DisplayCommand>>,
@@ -226,6 +248,11 @@ fn spawn_stdout_interactive(
       compact: opts.compact,
       no_system: opts.no_system,
       name_width,
+      muted: muted
+        .iter()
+        .filter(|spec| spec.flags.muted)
+        .map(|spec| spec.name.clone())
+        .collect(),
       name_width_rx,
       display_rx,
       modal_active,
@@ -249,8 +276,8 @@ fn cmd_check(config_path: &str) -> ExitCode {
   match read_and_parse(config_path) {
     Ok(processes) => {
       eprintln!("{}: {} processes OK", config_path, processes.len());
-      for (name, cmd) in &processes {
-        eprintln!("  {}: {}", name, cmd);
+      for spec in &processes {
+        eprintln!("  {}{}: {}", spec.name, spec.flags.suffix(), spec.cmd);
       }
       ExitCode::SUCCESS
     }
@@ -261,8 +288,15 @@ fn cmd_check(config_path: &str) -> ExitCode {
 fn cmd_list(config_path: &str) -> ExitCode {
   match read_and_parse(config_path) {
     Ok(processes) => {
-      for (name, cmd) in &processes {
-        println!("{:<20} {}", name, cmd);
+      // Flags make the first column much wider than a name alone, so size it
+      // to the entries rather than to a fixed guess.
+      let labels: Vec<String> = processes
+        .iter()
+        .map(|spec| format!("{}{}", spec.name, spec.flags.suffix()))
+        .collect();
+      let width = labels.iter().map(String::len).max().unwrap_or(0).max(20);
+      for (label, spec) in labels.iter().zip(&processes) {
+        println!("{:<width$} {}", label, spec.cmd, width = width);
       }
       ExitCode::SUCCESS
     }
@@ -289,7 +323,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
 
   let use_file = has_explicit_config || !has_inline;
 
-  let mut all_processes: Vec<(String, String)> = Vec::new();
+  let mut all_processes: Vec<ProcessSpec> = Vec::new();
   if use_file {
     let config = match fs::read_to_string(&start.config) {
       Ok(c) => c,
@@ -300,12 +334,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     };
 
     match core::procfile::parse(&config, &start.names) {
-      Ok(p) => {
-        all_processes = p
-          .into_iter()
-          .map(|(n, c)| (n.to_string(), c.to_string()))
-          .collect()
-      }
+      Ok(p) => all_processes = p.iter().map(|def| def.to_spec()).collect(),
       Err(err) => {
         eprintln!("Error parsing Procfile\n{}", err);
         return 2.into();
@@ -313,27 +342,47 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
     }
   }
 
-  for (name, cmd) in inline {
-    all_processes.push((name.to_string(), cmd.to_string()));
-  }
+  all_processes.extend(inline);
 
   if all_processes.is_empty() {
     eprintln!("No processes to run");
     return 2.into();
   }
 
-  let process_refs: Vec<(&str, &str)> = all_processes
+  let opted_in = opted_in_names(&start);
+  let unknown: Vec<&str> = start
+    .enable
     .iter()
-    .map(|(n, c)| (n.as_str(), c.as_str()))
+    .filter(|name| !all_processes.iter().any(|spec| &&spec.name == name))
+    .map(String::as_str)
     .collect();
-
-  let (log_tx, _) = broadcast::channel(16384);
+  if !unknown.is_empty() {
+    eprintln!("Unknown process: {}", unknown.join(", "));
+    return 2.into();
+  }
 
   // Interactive mode needs a real terminal on both ends to draw the modal.
   let interactive = std::io::stdout().is_terminal() && !start.no_interactive;
 
+  // Headless there is no menu to bring an optional process up later, so one
+  // nobody asked for is simply not part of this run.
+  if !interactive {
+    all_processes
+      .retain(|spec| !spec.flags.optional || start.enable_all || opted_in.contains(&spec.name));
+
+    if all_processes.is_empty() {
+      eprintln!(
+        "No processes to run — every matching process is optional. \
+         Enable one with -e/--enable <name>, or all of them with -E/--enable-all."
+      );
+      return 2.into();
+    }
+  }
+
+  let (log_tx, _) = broadcast::channel(16384);
+
   let mut manager = match ProcessManager::new(
-    &process_refs,
+    &all_processes,
     start.effective_on_exit(interactive),
     log_tx.clone(),
   ) {
@@ -343,6 +392,14 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
       return 2.into();
     }
   };
+
+  if start.enable_all {
+    manager.enable_all();
+  } else {
+    // Naming a process on the command line is itself a request to run it,
+    // optional or not.
+    manager.enable(&opted_in);
+  }
 
   // Set up interactive mode channels
   let (name_width_rx, display_rx, modal_rx, raw_guard) = if interactive {
@@ -385,6 +442,7 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
   let stdout_handle = spawn_stdout_interactive(
     &start,
     manager.name_width(),
+    &all_processes,
     &log_tx,
     name_width_rx,
     display_rx,
