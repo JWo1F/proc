@@ -3,7 +3,7 @@
 //! Each process is spawned inside its own PTY, and output lines are
 //! multiplexed to stdout with a colored name prefix.
 //!
-//! Also supports pipe mode: `my_command | procfile` reads stdin and
+//! Also supports pipe mode: `my_command | proc` reads stdin and
 //! displays it through the same stdout/web consumers.
 
 use crate::core::manager::{OnExit, ProcessManager};
@@ -116,13 +116,13 @@ Process flags (comma separated, apply to that one process only):
   Only one of once/restart/stop per process — they are the same setting.
 
 Examples:
-  procfile
-  procfile web worker
-  procfile -e seed
-  procfile -r 'extra: sidekiq'
-  procfile -r 'migrate(once): rake db:migrate'
-  procfile check
-  procfile list
+  proc
+  proc web worker
+  proc -e seed
+  proc -r 'extra: sidekiq'
+  proc -r 'migrate(once): rake db:migrate'
+  proc check
+  proc list
 
 Procfile example:
   db: postgres -D ./tmp/db

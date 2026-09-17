@@ -1352,17 +1352,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
-name = "proc-macro2"
-version = "1.0.107"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
-dependencies = [
- "unicode-ident",
-]
-
-[[package]]
-name = "procfile"
-version = "2.11.0"
+name = "proc"
+version = "2.12.0"
 dependencies = [
  "axum",
  "chrono",
@@ -1376,6 +1367,15 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower-http",
+]
+
+[[package]]
+name = "proc-macro2"
+version = "1.0.107"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+dependencies = [
+ "unicode-ident",
 ]
 
 [[package]]

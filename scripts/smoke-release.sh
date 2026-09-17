@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT_DIR/target/release/procfile"
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/procfile-smoke.XXXXXX")"
+BIN="$ROOT_DIR/target/release/proc"
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/proc-smoke.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 run_expect_success() {

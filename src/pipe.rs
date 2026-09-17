@@ -1,8 +1,8 @@
 //! Pipe mode: reads lines from stdin and emits them as LogEvents.
 //!
-//! Used when procfile receives piped input, e.g.:
-//!   my_command | procfile
-//!   ssh host "cmd" | procfile -w
+//! Used when proc receives piped input, e.g.:
+//!   my_command | proc
+//!   ssh host "cmd" | proc -w
 
 use crate::core::LogEvent;
 use colored::Color;

@@ -12,7 +12,7 @@ fn dir_name() -> String {
   std::env::current_dir()
     .ok()
     .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-    .unwrap_or_else(|| "procfile".to_string())
+    .unwrap_or_else(|| "proc".to_string())
 }
 
 fn entry_to_sse(entry: &LogEntry) -> Result<Event, Infallible> {
