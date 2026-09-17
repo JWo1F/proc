@@ -58,7 +58,10 @@ pub type ResourceMap = HashMap<String, ResourceHistory>;
 /// Sample every tracked process's group once per `SAMPLE_INTERVAL`, for as
 /// long as `snapshot_rx` keeps producing values (i.e., for the life of the
 /// interactive session).
-pub fn run_sampler(mut snapshot_rx: watch::Receiver<Snapshot>, resources_tx: watch::Sender<ResourceMap>) {
+pub fn run_sampler(
+  mut snapshot_rx: watch::Receiver<Snapshot>,
+  resources_tx: watch::Sender<ResourceMap>,
+) {
   let mut system = System::new();
   let mut history: ResourceMap = HashMap::new();
   let refresh_kind = ProcessRefreshKind::nothing()

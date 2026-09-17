@@ -71,7 +71,10 @@ pub const MODE_ITEMS: &[Item] = &[
 /// Index into `Item` by its hotkey, ignoring case and any modifier keys that
 /// would make it a different shortcut (Ctrl+P, etc).
 fn hotkey_index(items: &[Item], key: KeyEvent) -> Option<usize> {
-  if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+  if key
+    .modifiers
+    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+  {
     return None;
   }
   let KeyCode::Char(c) = key.code else {
@@ -126,12 +129,26 @@ pub enum Screen {
 /// handling it can freely call back into other `&mut self` methods without
 /// fighting the borrow checker over `self.stack`.
 enum Peek {
-  Main { selected: usize },
-  Processes { selected: usize },
-  ProcessActions { name: String, selected: usize },
-  ProcessMode { name: String, selected: usize },
-  AllActions { selected: usize },
-  ModeMenu { selected: usize },
+  Main {
+    selected: usize,
+  },
+  Processes {
+    selected: usize,
+  },
+  ProcessActions {
+    name: String,
+    selected: usize,
+  },
+  ProcessMode {
+    name: String,
+    selected: usize,
+  },
+  AllActions {
+    selected: usize,
+  },
+  ModeMenu {
+    selected: usize,
+  },
   AddProcess {
     name: String,
     command: String,
@@ -171,8 +188,12 @@ impl App {
 
   fn peek(&self) -> Peek {
     match self.stack.last().expect("stack is never empty") {
-      Screen::Main { selected } => Peek::Main { selected: *selected },
-      Screen::Processes { selected } => Peek::Processes { selected: *selected },
+      Screen::Main { selected } => Peek::Main {
+        selected: *selected,
+      },
+      Screen::Processes { selected } => Peek::Processes {
+        selected: *selected,
+      },
       Screen::ProcessActions { name, selected } => Peek::ProcessActions {
         name: name.clone(),
         selected: *selected,
@@ -181,8 +202,12 @@ impl App {
         name: name.clone(),
         selected: *selected,
       },
-      Screen::AllActions { selected } => Peek::AllActions { selected: *selected },
-      Screen::ModeMenu { selected } => Peek::ModeMenu { selected: *selected },
+      Screen::AllActions { selected } => Peek::AllActions {
+        selected: *selected,
+      },
+      Screen::ModeMenu { selected } => Peek::ModeMenu {
+        selected: *selected,
+      },
       Screen::AddProcess {
         name,
         command,
@@ -262,8 +287,8 @@ impl App {
       return;
     };
 
-    let plain = !key.modifiers.contains(KeyModifiers::CONTROL)
-      && !key.modifiers.contains(KeyModifiers::ALT);
+    let plain =
+      !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT);
 
     match key.code {
       KeyCode::Tab | KeyCode::Down | KeyCode::Up => {

@@ -131,7 +131,11 @@ fn render_body(frame: &mut Frame, area: Rect, app: &App) {
 
     Screen::Processes { selected } => {
       if app.snapshot.processes.is_empty() {
-        render_empty(frame, area, "No processes yet — add one from the main menu.");
+        render_empty(
+          frame,
+          area,
+          "No processes yet — add one from the main menu.",
+        );
         return;
       }
       let items: Vec<ListItem> = app
@@ -234,7 +238,10 @@ fn status_style(status: &str) -> Style {
 }
 
 fn render_list(frame: &mut Frame, area: Rect, items: &[Item], selected: usize) {
-  let items: Vec<ListItem> = items.iter().map(|item| ListItem::new(item_label(*item))).collect();
+  let items: Vec<ListItem> = items
+    .iter()
+    .map(|item| ListItem::new(item_label(*item)))
+    .collect();
   render_items(frame, area, items, selected);
 }
 
@@ -258,7 +265,11 @@ fn render_empty(frame: &mut Frame, area: Rect, message: &str) {
 fn render_add_process(frame: &mut Frame, area: Rect, name: &str, command: &str, field: AddField) {
   let rows = Layout::default()
     .direction(Direction::Vertical)
-    .constraints([Constraint::Length(3), Constraint::Length(3), Constraint::Min(0)])
+    .constraints([
+      Constraint::Length(3),
+      Constraint::Length(3),
+      Constraint::Min(0),
+    ])
     .split(area);
 
   render_field(frame, rows[0], "Name", name, field == AddField::Name);
@@ -310,7 +321,10 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
     ])
   };
 
-  let mut lines = vec![field("Command", proc.command.clone()), field("Status", status)];
+  let mut lines = vec![
+    field("Command", proc.command.clone()),
+    field("Status", status),
+  ];
   if let Some(uptime) = proc.uptime {
     lines.push(field("Uptime", format_uptime(uptime)));
   }
@@ -328,7 +342,10 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
   }
   if let Some(r) = resources {
     lines.push(field("Processes", r.current.process_count.to_string()));
-    lines.push(field("Threads", format_thread_count(r.current.thread_count)));
+    lines.push(field(
+      "Threads",
+      format_thread_count(r.current.thread_count),
+    ));
   }
 
   let rows = Layout::default()
@@ -368,8 +385,24 @@ fn render_info(frame: &mut Frame, area: Rect, name: &str, app: &App) {
       );
     }
     None => {
-      render_metric_panel(frame, rows[2], "Memory", "warming up…".to_string(), None, &[], MEM_COLOR);
-      render_metric_panel(frame, rows[3], "CPU", "warming up…".to_string(), None, &[], CPU_COLOR);
+      render_metric_panel(
+        frame,
+        rows[2],
+        "Memory",
+        "warming up…".to_string(),
+        None,
+        &[],
+        MEM_COLOR,
+      );
+      render_metric_panel(
+        frame,
+        rows[3],
+        "CPU",
+        "warming up…".to_string(),
+        None,
+        &[],
+        CPU_COLOR,
+      );
     }
   }
 }
@@ -426,9 +459,18 @@ fn render_dashboard(frame: &mut Frame, area: Rect, app: &App) {
     return;
   }
 
-  let names: Vec<String> = app.snapshot.processes.iter().map(|p| p.name.clone()).collect();
+  let names: Vec<String> = app
+    .snapshot
+    .processes
+    .iter()
+    .map(|p| p.name.clone())
+    .collect();
   let totals = |pick: fn(&ResourceHistory) -> f64| -> f64 {
-    names.iter().filter_map(|n| app.resources.get(n)).map(pick).sum()
+    names
+      .iter()
+      .filter_map(|n| app.resources.get(n))
+      .map(pick)
+      .sum()
   };
   let total_cpu = totals(|r| r.current.cpu_percent as f64) as f32;
   let total_mem_mb = (totals(|r| r.current.mem_bytes as f64) / (1024.0 * 1024.0)) as u64;
@@ -511,7 +553,9 @@ fn aggregate_history(
     .unwrap_or(0);
   let mut result = vec![0u64; max_len];
   for name in names {
-    let Some(r) = resources.get(name) else { continue };
+    let Some(r) = resources.get(name) else {
+      continue;
+    };
     let history = pick(r);
     let offset = max_len - history.len();
     for (i, value) in history.iter().enumerate() {
@@ -525,7 +569,11 @@ fn render_process_table(frame: &mut Frame, area: Rect, app: &App) {
   let header = Row::new(vec!["NAME", "STATUS", "CPU%", "MEM MB", "PROCS", "THRD"])
     .style(Style::default().fg(MUTED).add_modifier(Modifier::BOLD));
 
-  let rows = app.snapshot.processes.iter().map(|p| dashboard_row(p, app.resources.get(&p.name)));
+  let rows = app
+    .snapshot
+    .processes
+    .iter()
+    .map(|p| dashboard_row(p, app.resources.get(&p.name)));
 
   let widths = [
     Constraint::Length(14),
@@ -548,7 +596,12 @@ fn dashboard_row<'a>(proc: &'a ProcessSnapshot, resources: Option<&ResourceHisto
       r.current.process_count.to_string(),
       format_thread_count(r.current.thread_count),
     ),
-    None => ("—".to_string(), "—".to_string(), "—".to_string(), "—".to_string()),
+    None => (
+      "—".to_string(),
+      "—".to_string(),
+      "—".to_string(),
+      "—".to_string(),
+    ),
   };
 
   Row::new(vec![
@@ -592,9 +645,7 @@ fn render_ps(frame: &mut Frame, area: Rect, app: &App) {
     Constraint::Length(9),
   ];
 
-  let table = Table::new(rows, widths)
-    .header(header)
-    .column_spacing(1);
+  let table = Table::new(rows, widths).header(header).column_spacing(1);
   frame.render_widget(table, area);
 }
 
@@ -605,10 +656,7 @@ fn render_footer(frame: &mut Frame, area: Rect, app: &App) {
     Screen::Info { .. } | Screen::Ps | Screen::Dashboard => "Esc  back",
     _ => "↑↓  move    Enter  select    letter  jump    Esc  back",
   };
-  frame.render_widget(
-    Paragraph::new(hint).style(Style::default().fg(MUTED)),
-    area,
-  );
+  frame.render_widget(Paragraph::new(hint).style(Style::default().fg(MUTED)), area);
 }
 
 /// A box `width` wide and `height` tall, centered within `area` (clamped so

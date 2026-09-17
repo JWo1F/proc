@@ -156,7 +156,11 @@ impl ProcessManager {
       return Err("No processes to run".to_string());
     }
 
-    let name_width = entries.iter().map(|spec| spec.name.len()).max().unwrap_or(0);
+    let name_width = entries
+      .iter()
+      .map(|spec| spec.name.len())
+      .max()
+      .unwrap_or(0);
     let (tx, rx) = mpsc::unbounded_channel();
 
     let processes: HashMap<usize, Process> = entries

@@ -83,9 +83,11 @@ impl RunOptions {
   /// modal is still there to inspect what happened and start it again — so a
   /// process ending on its own must not tear the session down.
   fn effective_on_exit(&self, interactive: bool) -> OnExit {
-    self
-      .on_exit
-      .unwrap_or(if interactive { OnExit::Ignore } else { OnExit::Stop })
+    self.on_exit.unwrap_or(if interactive {
+      OnExit::Ignore
+    } else {
+      OnExit::Stop
+    })
   }
 }
 
@@ -434,7 +436,12 @@ async fn cmd_start(start: RunOptions) -> ExitCode {
       key_rx,
     ));
 
-    (Some(name_width_rx), Some(display_rx), Some(modal_rx), Some(guard))
+    (
+      Some(name_width_rx),
+      Some(display_rx),
+      Some(modal_rx),
+      Some(guard),
+    )
   } else {
     (None, None, None, None)
   };
