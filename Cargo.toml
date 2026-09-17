@@ -4,6 +4,9 @@ version = "2.13.0"
 edition = "2024"
 rust-version = "1.98"
 description = "A process manager that runs commands defined in a Procfile"
+license = "MIT"
+repository = "https://github.com/JWo1F/proc"
+readme = "README.md"
 
 [dependencies]
 tokio = { version = "1.53.1", features = ["macros", "process", "rt", "io-util", "io-std", "signal", "sync", "time"] }
